@@ -13,7 +13,11 @@ A local Windows desktop app that converts CPS clipboard XML into an editable Exc
 
 To plan a fresh layout instead of editing existing zones, paste any codeplug for the target radio model (a factory-default codeplug works), open **Start a new zone layout**, and choose the number of zones, then an optional name, channel type, and channel count for each zone. Select **+ Add type** to mix channel types in one zone (for example 12 Digital and 2 Analog); each added type gets its own count and can be removed with **×**, and a zone can hold up to 160 channels in total. Unnamed zones become `Zone 1`, `Zone 2`…; zone names must be unique, 16 characters or fewer, and cannot be `Channel Pool`. Channels are numbered `CH 01`, `CH 02`… through the whole zone, ready to rename in the workbook. Channel defaults (Privacy Enabled, Privacy Key Alias, RAS Key Alias, Admit Criteria, In Call Criteria, Receive Only) are applied to every generated channel whose type supports them; Analog channels skip the privacy, RAS, and In Call settings and use Always in place of Color Code Free. Key aliases entered here are added to the Security sheet and must already exist in the target codeplug. The exported workbook keeps the pasted codeplug's radio settings, contacts, Channel Pool, voice lists, and site lists, and replaces its zones with the generated rows. Each generated channel is a new record, so import stops until it has the fields its type requires (frequencies and color code for conventional channels, a contact, and a voice or site list for Capacity Plus). Recheck scan lists, roam lists, and buttons that referred to the old zone channels in CPS.
 
-Your codeplug is processed locally. The packaged app bundles its Excel dependencies, so it does not need internet access after installation.
+Your codeplug is processed locally. The packaged app bundles its Excel dependencies, so it works without internet access after installation.
+
+### Updates
+
+The top of the app shows the installed version. When it starts, unArchive quietly checks the latest GitHub release; if a newer version exists, **Install update** downloads it, verifies its signature, closes the app, and runs the installer. **Check for updates** checks on demand. Without internet access the check simply does nothing. Versions before 0.2.0 have no updater, so install 0.2.0 once by hand.
 
 ## Import safety rules
 
@@ -42,15 +46,19 @@ The shareable installer will be created under `src-tauri\target\release\bundle\n
 
 ## Publish a release
 
-The **Windows installer** GitHub Actions workflow builds the installer on a Windows runner and publishes a release with the setup executable attached. The version comes from the tag, so there is no need to edit version numbers before releasing. Run the import safety tests locally first:
+The **Windows installer** GitHub Actions workflow builds and signs the installer on a Windows runner, then publishes a release with the setup executable, its signature, and the `latest.json` update manifest that installed apps check. The version comes from the tag, so there is no need to edit version numbers before releasing, but each tag must be higher than the last release or installed apps will not offer it. Run the import safety tests locally first:
 
 ```powershell
 npm test
-git tag v0.1.1
-git push origin v0.1.1
+git tag v0.2.1
+git push origin v0.2.1
 ```
 
-The latest installer is always available from the repository's **Releases** page. Running the workflow manually from the **Actions** tab builds an installer artifact for testing without publishing a release. To set the version in the source files locally, run `npm run version:set -- 0.1.1`.
+The latest installer is always available from the repository's **Releases** page. Running the workflow manually from the **Actions** tab builds a signed installer artifact for testing without publishing a release. To set the version in the source files locally, run `npm run version:set -- 0.2.1`.
+
+### Update signing key
+
+Installed apps only accept updates signed with the private key that matches the public key in `src-tauri/tauri.conf.json`. The workflow reads it from the repository secret `TAURI_SIGNING_PRIVATE_KEY` (the full contents of the key file; the key has no password, so `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` stays unset). Keep a backup of the key file somewhere safe: if it is lost, installed apps can no longer be updated in place and everyone must reinstall by hand once with a new key. Never commit it. Local builds with `npm run package:windows` do not need the key; they skip the updater signature.
 
 ## CPS blueprints and local tests
 

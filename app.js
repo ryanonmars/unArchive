@@ -2,8 +2,10 @@ import * as XLSX from 'xlsx';
 import JSZip from 'jszip';
 import { CPS_BLUEPRINTS } from './blueprints.generated.js';
 import { readText as readClipboardText, writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
-import { save } from '@tauri-apps/plugin-dialog';
+import { ask, save } from '@tauri-apps/plugin-dialog';
 import { writeFile } from '@tauri-apps/plugin-fs';
+import { getVersion } from '@tauri-apps/api/app';
+import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
 (() => {
   'use strict';
   const $ = (id) => document.getElementById(id);
@@ -1429,4 +1431,50 @@ import { writeFile } from '@tauri-apps/plugin-fs';
   $('workbook-file').addEventListener('change', e => { const file = e.target.files[0]; e.target.value = ''; if (file) importWorkbook(file); });
   $('copy-output').addEventListener('click', async () => { try { await writeClipboardText(output.value); message(outputStatus, 'XML copied to your clipboard.', 'ok'); } catch { output.select(); document.execCommand('copy'); message(outputStatus, 'XML selected—use Ctrl+C to copy it.', 'ok'); } });
   $('download-xml').addEventListener('click', async () => { try { const saved = await saveFile(output.value, 'codeplug-rebuilt.xml', { name: 'CPS XML', extensions: ['xml'] }); message(outputStatus, saved ? 'Rebuilt XML saved.' : 'Rebuilt XML save cancelled.', saved ? 'ok' : ''); } catch (err) { message(outputStatus, err.message, 'error'); } });
+
+  // Updates come from the signed latest.json published with each GitHub
+  // release; the updater refuses any installer not signed with our key. The
+  // startup check is quiet, so only a manual check reports "up to date" or a
+  // network problem.
+  const updateStatus = $('update-status'), updateCheck = $('update-check'), updateInstall = $('update-install');
+  let pendingUpdate = null;
+  async function checkUpdates(manual) {
+    updateCheck.disabled = true;
+    if (manual) message(updateStatus, 'Checking for updates…');
+    try {
+      pendingUpdate = await checkForUpdate();
+      updateInstall.hidden = !pendingUpdate;
+      if (pendingUpdate) message(updateStatus, `Version ${pendingUpdate.version} is available.`, 'ok');
+      else if (manual) message(updateStatus, 'You have the latest version.', 'ok');
+    } catch {
+      if (manual) message(updateStatus, 'Could not check for updates. Check your internet connection and try again.', 'error');
+    } finally { updateCheck.disabled = false; }
+  }
+  async function installUpdate() {
+    if (!pendingUpdate) return;
+    const proceed = await ask(`unArchive ${pendingUpdate.version} will download and install now. unArchive closes during the install, so save any workbook or XML you still need first.`, { title: 'Install update', kind: 'info', okLabel: 'Install', cancelLabel: 'Not now' });
+    if (!proceed) return;
+    updateInstall.disabled = true; updateCheck.disabled = true;
+    try {
+      let total = 0, received = 0;
+      await pendingUpdate.downloadAndInstall(event => {
+        if (event.event === 'Started') total = event.data.contentLength || 0;
+        if (event.event === 'Progress') { received += event.data.chunkLength; message(updateStatus, total ? `Downloading update… ${Math.round(received / total * 100)}%` : 'Downloading update…'); }
+        if (event.event === 'Finished') message(updateStatus, 'Installing update…');
+      });
+    } catch (err) {
+      message(updateStatus, `The update could not be installed: ${err?.message || err}`, 'error');
+      updateInstall.disabled = false; updateCheck.disabled = false;
+    }
+  }
+  (async () => {
+    let version = '';
+    try { version = await getVersion(); } catch { /* Not running inside the desktop app. */ }
+    if (!version) return;
+    $('app-version').textContent = `unArchive v${version}`;
+    updateCheck.hidden = false;
+    updateCheck.addEventListener('click', () => checkUpdates(true));
+    updateInstall.addEventListener('click', installUpdate);
+    checkUpdates(false);
+  })();
 })();

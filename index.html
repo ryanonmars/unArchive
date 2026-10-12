@@ -9,6 +9,14 @@
   </head>
   <body>
     <main>
+      <header class="app-bar">
+        <span id="app-version" class="app-version">unArchive</span>
+        <div class="app-update">
+          <span id="update-status" class="status" aria-live="polite"></span>
+          <button id="update-install" class="small" hidden>Install update</button>
+          <button id="update-check" class="secondary small" hidden>Check for updates</button>
+        </div>
+      </header>
       <section class="card">
         <div class="step"><span>1</span><div><h2>Copy your configuration from CPS</h2><p>In CPS, copy the full configuration, then select Paste from Clipboard. Nothing leaves this browser.</p></div></div>
         <div class="actions">

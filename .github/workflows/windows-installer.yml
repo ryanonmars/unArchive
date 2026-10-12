@@ -41,8 +41,17 @@ jobs:
         shell: bash
         run: node scripts/set-version.mjs "${GITHUB_REF_NAME#v}"
 
-      - name: Build installer
-        run: npm run package:windows
+      # Signing the installer lets the in-app updater verify it. The public key
+      # is in tauri.conf.json; the private key is the TAURI_SIGNING_PRIVATE_KEY
+      # repository secret.
+      - name: Build signed installer
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then echo "The TAURI_SIGNING_PRIVATE_KEY secret is not set." >&2; exit 1; fi
+          npm run tauri -- build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":true}}'
 
       - name: Locate installer
         id: installer
@@ -51,14 +60,43 @@ jobs:
           shopt -s nullglob
           files=(src-tauri/target/release/bundle/nsis/*-setup.exe)
           if [ "${#files[@]}" -ne 1 ]; then echo "Expected one installer, found ${#files[@]}." >&2; exit 1; fi
+          if [ ! -f "${files[0]}.sig" ]; then echo "The installer signature ${files[0]}.sig is missing." >&2; exit 1; fi
           echo "path=${files[0]}" >> "$GITHUB_OUTPUT"
           echo "name=$(basename "${files[0]}")" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.installer.outputs.name }}
-          path: ${{ steps.installer.outputs.path }}
+          path: |
+            ${{ steps.installer.outputs.path }}
+            ${{ steps.installer.outputs.path }}.sig
           if-no-files-found: error
+
+      # The in-app updater reads latest.json from the latest release.
+      - name: Write update manifest
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          INSTALLER: ${{ steps.installer.outputs.path }}
+          INSTALLER_NAME: ${{ steps.installer.outputs.name }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const { GITHUB_REF_NAME: tag, GITHUB_REPOSITORY: repo, INSTALLER: file, INSTALLER_NAME: name } = process.env;
+            const manifest = {
+              version: tag.replace(/^v/, ""),
+              notes: `unArchive ${tag}`,
+              pub_date: new Date().toISOString(),
+              platforms: {
+                "windows-x86_64": {
+                  signature: fs.readFileSync(`${file}.sig`, "utf8").trim(),
+                  url: `https://github.com/${repo}/releases/download/${tag}/${name}`
+                }
+              }
+            };
+            fs.writeFileSync("latest.json", JSON.stringify(manifest, null, 2));
+          '
+          cat latest.json
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -68,8 +106,9 @@ jobs:
           INSTALLER: ${{ steps.installer.outputs.path }}
         run: |
           notes="Download ${{ steps.installer.outputs.name }} below and run it to install or update unArchive on Windows 10 or 11."
+          assets=("$INSTALLER" "$INSTALLER.sig" latest.json)
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "$INSTALLER" --repo "$GITHUB_REPOSITORY" --clobber
+            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
           else
-            gh release create "$GITHUB_REF_NAME" "$INSTALLER" --repo "$GITHUB_REPOSITORY" --title "unArchive $GITHUB_REF_NAME" --notes "$notes"
+            gh release create "$GITHUB_REF_NAME" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --title "unArchive $GITHUB_REF_NAME" --notes "$notes"
           fi
