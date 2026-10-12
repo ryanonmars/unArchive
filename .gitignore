@@ -1,0 +1,29 @@
+# Dependencies and build output
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+# Only the .ico is used by the build
+src-tauri/icons/*
+!src-tauri/icons/icon.ico
+
+# Codeplugs and workbooks never belong in the repository. The CPS fixtures
+# used by scripts/generate-blueprints.mjs and the local safety tests stay local.
+*.xml
+*.xlsx
+
+# Local-only tooling that reads the private CPS fixtures
+scripts/create-scratch-test-workbook.mjs
+scripts/test-import-safety.mjs
+
+# Local LibreOffice compatibility-test artifacts
+formula-compat-output/
+formula-compat-profile/
+
+# OS, editor, and log files
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
+*.log

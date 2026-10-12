@@ -1,0 +1,18 @@
+[package]
+name = "unarchive"
+version = "0.1.0"
+description = "Build CPS codeplug workbooks locally"
+authors = ["unArchive"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+tauri = { version = "2.11.5", features = [] }
+tauri-plugin-clipboard-manager = "2.3.3"
+tauri-plugin-dialog = "2.7.3"
+tauri-plugin-fs = "2.5.2"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]

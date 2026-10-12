@@ -1,0 +1,31 @@
+{
+  "name": "unarchive",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate:blueprints": "node scripts/generate-blueprints.mjs",
+    "dev": "vite",
+    "build": "vite build",
+    "test": "node scripts/test-import-safety.mjs",
+    "tauri": "tauri",
+    "package:windows": "tauri build --bundles nsis",
+    "version:set": "node scripts/set-version.mjs"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/plugin-clipboard-manager": "^2.0.0",
+    "@tauri-apps/plugin-dialog": "^2.7.3",
+    "@tauri-apps/plugin-fs": "^2.5.2",
+    "jszip": "^3.10.1",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0",
+    "linkedom": "^0.18.12",
+    "vite": "^6.0.0"
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true
+  }
+}
