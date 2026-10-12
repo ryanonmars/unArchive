@@ -484,11 +484,12 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
     'Linked Capacity Plus': { callType: 'Capacity Plus', prefix: 'LCP' },
     Digital: { callType: 'Digital', prefix: 'DIG' }
   };
-  const TEMPLATE_MAX_CONTACT_IDS = { 'Capacity Plus': 254, Digital: 1000 };
+  const TEMPLATE_MAX_CONTACTS = 1000, TEMPLATE_MAX_CALL_ID = 16776415;
   const TEMPLATE_ALL_CALL_NAMES = { 'Capacity Plus': 'ALL CALL', Digital: 'DIG ALL CALL' };
   const TEMPLATE_CALL_OPTIONS = ['Group Call', 'All Call'];
-  // The first row has no type, so the pasted contacts are kept until one is chosen.
-  const templateContacts = [{ type: '', call: 'Group Call', count: 10 }];
+  // The first row has no type, so the pasted contacts are kept until one is
+  // chosen. A blank start continues the IDs of the call type's previous block.
+  const templateContacts = [{ type: '', call: 'Group Call', count: 10, start: '' }];
   function renderTemplateContacts(focus) {
     const cell = (...children) => { const td = document.createElement('td'); td.append(...children); return td; };
     let focusTarget = null;
@@ -513,25 +514,31 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
       }
       call.addEventListener('change', () => { row.call = call.value; renderTemplateContacts(); showTemplatePreview(); });
       const count = document.createElement('input');
-      count.setAttribute('type', 'number'); count.setAttribute('min', '1'); count.setAttribute('max', String(TEMPLATE_MAX_CONTACT_IDS.Digital));
+      count.setAttribute('type', 'number'); count.setAttribute('min', '1'); count.setAttribute('max', String(TEMPLATE_MAX_CONTACTS));
       count.setAttribute('aria-label', `${label} count`);
-      // All Call is a single contact per system.
+      // All Call is a single contact per system with a fixed ID.
       count.setAttribute('value', row.call === 'All Call' ? '1' : String(row.count));
       count.addEventListener('input', () => { row.count = count.value; showTemplatePreview(); });
-      if (!row.type) { call.setAttribute('disabled', ''); count.setAttribute('disabled', ''); }
-      else if (row.call === 'All Call') count.setAttribute('disabled', '');
+      const start = document.createElement('input');
+      start.setAttribute('type', 'number'); start.setAttribute('min', '1'); start.setAttribute('max', String(TEMPLATE_MAX_CALL_ID));
+      start.setAttribute('aria-label', `${label} starting Call ID`);
+      start.setAttribute('placeholder', row.call === 'All Call' && row.type ? ALL_CALL_IDS[TEMPLATE_CONTACT_TYPES[row.type].callType] : 'Auto');
+      start.setAttribute('value', row.call === 'All Call' ? '' : text(row.start));
+      start.addEventListener('input', () => { row.start = start.value; showTemplatePreview(); });
+      if (!row.type) [call, count, start].forEach(input => input.setAttribute('disabled', ''));
+      else if (row.call === 'All Call') [count, start].forEach(input => input.setAttribute('disabled', ''));
       if (focus === row) focusTarget = type;
       const action = index
         ? templateButton('×', `Remove ${label}`, 'template-remove', () => { templateContacts.splice(templateContacts.indexOf(row), 1); renderTemplateContacts(); showTemplatePreview(); })
         : templateButton('+ Add contact type', 'Add another contact type', 'template-add', () => {
           const used = new Set(templateContacts.map(item => item.type));
-          const added = { type: Object.keys(TEMPLATE_CONTACT_TYPES).find(option => !used.has(option)) || 'Capacity Plus', call: 'Group Call', count: 10 };
+          const added = { type: Object.keys(TEMPLATE_CONTACT_TYPES).find(option => !used.has(option)) || 'Capacity Plus', call: 'Group Call', count: 10, start: '' };
           templateContacts.push(added);
           renderTemplateContacts(added); showTemplatePreview();
         });
       const tr = document.createElement('tr');
       if (index) tr.setAttribute('class', 'template-subrow');
-      tr.append(cell(type), cell(call), cell(count), cell(action));
+      tr.append(cell(type), cell(call), cell(count), cell(start), cell(action));
       return tr;
     }));
     focusTarget?.focus?.();
@@ -544,31 +551,36 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
       if (!callType) throw new Error('New layout: select a supported contact type.');
       if (row.call === 'All Call') return { label: row.type, callType, allCall: true };
       const count = Number(row.count);
-      if (!Number.isInteger(count) || count < 1 || count > TEMPLATE_MAX_CONTACT_IDS[callType]) throw new Error(`New layout: ${row.type} contacts must be a whole number from 1 through ${TEMPLATE_MAX_CONTACT_IDS[callType]}.`);
-      return { label: row.type, callType, prefix, count };
+      if (!Number.isInteger(count) || count < 1 || count > TEMPLATE_MAX_CONTACTS) throw new Error(`New layout: ${row.type} contacts must be a whole number from 1 through ${TEMPLATE_MAX_CONTACTS}.`);
+      const startText = text(row.start).trim(), start = startText ? Number(startText) : null;
+      if (start !== null && (!Number.isInteger(start) || start < 1 || start > TEMPLATE_MAX_CALL_ID)) throw new Error(`New layout: the ${row.type} starting Call ID must be a whole number from 1 through ${TEMPLATE_MAX_CALL_ID}.`);
+      return { label: row.type, callType, prefix, count, start };
     });
     const allCalls = new Set();
     for (const group of groups.filter(item => item.allCall)) {
       if (allCalls.has(group.callType)) throw new Error(`New layout: a codeplug has one ${group.callType} All Call; Capacity Plus and Linked Capacity Plus share it.`);
       allCalls.add(group.callType);
     }
-    const idTotals = {}, nameTotals = {};
-    for (const group of groups.filter(item => !item.allCall)) {
-      idTotals[group.callType] = (idTotals[group.callType] || 0) + group.count;
-      nameTotals[group.prefix] = (nameTotals[group.prefix] || 0) + group.count;
-    }
-    for (const [callType, total] of Object.entries(idTotals)) {
-      if (total > TEMPLATE_MAX_CONTACT_IDS[callType]) throw new Error(`New layout: ${total} ${callType} contacts exceed the ${TEMPLATE_MAX_CONTACT_IDS[callType]} available${callType === 'Capacity Plus' ? ' Capacity Plus Call IDs (Linked Capacity Plus shares them)' : ''}.`);
-    }
-    // Names number per prefix and Call IDs per call type, through all rows.
-    const nextId = {}, nextName = {}, contacts = [];
+    const nameTotals = {};
+    for (const group of groups.filter(item => !item.allCall)) nameTotals[group.prefix] = (nameTotals[group.prefix] || 0) + group.count;
+    // Names number per prefix through all rows. Call IDs run from each block's
+    // starting ID, or continue the call type's previous block (from 1). Linked
+    // Capacity Plus shares the Capacity Plus IDs, so blocks of either label
+    // must not overlap, and a Capacity Plus block must skip the All Call ID.
+    const nextId = {}, nextName = {}, usedIds = {}, contacts = [];
     for (const group of groups) {
       if (group.allCall) { contacts.push({ name: TEMPLATE_ALL_CALL_NAMES[group.callType], id: ALL_CALL_IDS[group.callType], callType: group.callType, label: 'All Call' }); continue; }
-      for (let i = 0; i < group.count; i++) {
+      const first = group.start ?? (nextId[group.callType] || 1), last = first + group.count - 1;
+      if (last > TEMPLATE_MAX_CALL_ID) throw new Error(`New layout: the ${group.label} block would end at Call ID ${last}; the highest allowed is ${TEMPLATE_MAX_CALL_ID}.`);
+      if (group.callType === 'Capacity Plus' && first <= 255 && last >= 255) throw new Error(`New layout: the ${group.label} block (Call IDs ${first}–${last}) includes 255, which is reserved for the Capacity Plus All Call. Choose a starting Call ID that avoids it.`);
+      const used = usedIds[group.callType] = usedIds[group.callType] || new Map();
+      for (let id = first; id <= last; id++) {
+        if (used.has(id)) throw new Error(`New layout: Call ID ${id} is used by both the ${used.get(id)} and ${group.label} blocks. Change a starting Call ID so the blocks do not overlap.`);
+        used.set(id, group.label);
         const number = nextName[group.prefix] = (nextName[group.prefix] || 0) + 1;
-        const id = nextId[group.callType] = (nextId[group.callType] || 0) + 1;
         contacts.push({ name: `${group.prefix} ${String(number).padStart(Math.max(2, String(nameTotals[group.prefix]).length), '0')}`, id: String(id), callType: group.callType, label: group.label });
       }
+      nextId[group.callType] = last + 1;
     }
     return contacts;
   }
@@ -901,7 +913,7 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
     if (!/^\d+$/.test(id)) throw new Error(`${name}: ${type} Call ID must be a whole number.`);
     const value = Number(id);
     if (!Number.isSafeInteger(value)) throw new Error(`${name}: Call ID is too large.`);
-    if (type === 'Capacity Plus' && (value < 1 || value > 254)) throw new Error(`${name}: Capacity Plus Call ID must be from 1 through 254; 255 is reserved for All Call.`);
+    if (type === 'Capacity Plus' && (value < 1 || value > 16776415 || value === 255)) throw new Error(`${name}: Capacity Plus Call ID must be from 1 through 16776415, other than 255, which is reserved for All Call.`);
     if (type === 'Digital' && (value < 1 || value > 16776415)) throw new Error(`${name}: Digital Call ID must be from 1 through 16776415; 16777215 is reserved for All Call.`);
     if (type === 'MDC' && (value < 0 || value > 65535)) throw new Error(`${name}: MDC Call ID must be from 0 through 65535.`);
   }
