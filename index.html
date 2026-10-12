@@ -26,10 +26,11 @@
         <p id="xml-status" class="status" aria-live="polite"></p>
 
         <details id="template-builder" class="advanced">
-          <summary>Start a new zone layout (optional)</summary>
-          <p>Use the pasted codeplug as a base and replace its zones with a blank layout. Radio settings, contacts, Channel Pool, voice lists, and site lists are kept. Every generated channel is a new record, so import will ask for its frequencies, contact, and lists before enabling Copy XML.</p>
-          <label class="check"><input id="template-enabled" type="checkbox"> Replace zones with this layout when exporting</label>
+          <summary>Start a new layout (optional)</summary>
+          <p>Use the pasted codeplug as a base and replace its zones, and optionally its contacts, with a blank layout. Radio settings, voice lists, and site lists are kept. Every generated channel is a new record, so import will ask for its frequencies, contact, and lists before enabling Copy XML.</p>
+          <label class="check"><input id="template-enabled" type="checkbox"> Use this layout when exporting</label>
           <fieldset id="template-fields" class="template-fields" disabled>
+            <h3>Zones</h3>
             <div class="template-grid">
               <label>Number of zones<input id="template-zones" type="number" min="1" max="250" value="4"></label>
             </div>
@@ -38,6 +39,15 @@
               <thead><tr><th>#</th><th>Zone name (optional)</th><th>Channel type</th><th>Channels</th><th><span class="visually-hidden">Actions</span></th></tr></thead>
               <tbody id="template-zone-rows"></tbody>
             </table>
+            <h3>Contacts</h3>
+            <p class="hint">Optional. Choose a contact type to replace the pasted contacts with numbered ones (CP 01, LCP 01, DIG 01…) and sequential Call IDs to rename in the workbook; leave it on None to keep the pasted contacts. Linked Capacity Plus channels use Capacity Plus contacts. All Call adds the system's single All Call contact.</p>
+            <table class="template-table">
+              <thead><tr><th>Contact type</th><th>Call</th><th>Contacts</th><th><span class="visually-hidden">Actions</span></th></tr></thead>
+              <tbody id="template-contact-rows"></tbody>
+            </table>
+            <h3>Channel Pool</h3>
+            <label class="check"><input id="template-clear-pool" type="checkbox"> Clear the Channel Pool</label>
+            <p class="hint">Removes the pasted Channel Pool channels and their frequencies, and empties voice list members that pointed at them. Leave unchecked to keep them.</p>
             <h3>Channel defaults</h3>
             <p class="hint">Applied to every generated channel that supports the setting. Analog channels have no privacy, RAS, or In Call Criteria, and use Always when Color Code Free is selected. Key aliases must already exist in the target codeplug.</p>
             <div class="template-grid">

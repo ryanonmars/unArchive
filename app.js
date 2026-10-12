@@ -68,6 +68,7 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
   const CONTACT_TYPE_ORDER = ['CapacityPlusCalls', 'DigitalCalls', 'MDCCalls', 'QuikCallIICalls', 'PhoneCalls'];
   const CONTACT_COLLECTIONS = ['MDCCalls', 'QuikCallIICalls', 'DigitalCalls', 'CapacityPlusCalls', 'PhoneCalls'];
   const CONTACT_CALL_TYPE_OPTIONS = ['MDC', 'Quik Call II', 'Digital', 'Capacity Plus'];
+  const ALL_CALL_IDS = { Digital: '16777215', 'Capacity Plus': '255' };
   const ZONE_CHANNEL_TYPE_OPTIONS = ['Analog', 'Digital', 'Capacity Plus', 'Linked Capacity Plus'];
   const TRUE_FALSE_OPTIONS = ['True', 'False'];
   const SECURITY_PRIVACY_TYPE_OPTIONS = ['None', 'Basic', 'Enhanced'];
@@ -456,7 +457,9 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
             zone.groups.splice(zone.groups.indexOf(group), 1);
             renderTemplateZones(); showTemplatePreview();
           });
-          row.append(cell(), cell(document.createTextNode('and')), cell(type), cell(channels), cell(remove));
+          const and = cell(document.createTextNode('and'));
+          and.setAttribute('class', 'template-and');
+          row.append(cell(), and, cell(type), cell(channels), cell(remove));
         } else {
           // A new group defaults to a type the zone does not use yet.
           const add = templateButton('+ Add type', `Add another channel type to ${name}`, 'template-add', () => {
@@ -472,6 +475,124 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
     });
     $('template-zone-rows').replaceChildren(...rows);
     focusTarget?.focus?.();
+  }
+  // Contact rows of the new layout. Linked Capacity Plus channels use
+  // Capacity Plus contacts, so both labels create Capacity Plus contacts and
+  // share its Call ID range; only the default name prefix differs.
+  const TEMPLATE_CONTACT_TYPES = {
+    'Capacity Plus': { callType: 'Capacity Plus', prefix: 'CP' },
+    'Linked Capacity Plus': { callType: 'Capacity Plus', prefix: 'LCP' },
+    Digital: { callType: 'Digital', prefix: 'DIG' }
+  };
+  const TEMPLATE_MAX_CONTACT_IDS = { 'Capacity Plus': 254, Digital: 1000 };
+  const TEMPLATE_ALL_CALL_NAMES = { 'Capacity Plus': 'ALL CALL', Digital: 'DIG ALL CALL' };
+  const TEMPLATE_CALL_OPTIONS = ['Group Call', 'All Call'];
+  // The first row has no type, so the pasted contacts are kept until one is chosen.
+  const templateContacts = [{ type: '', call: 'Group Call', count: 10 }];
+  function renderTemplateContacts(focus) {
+    const cell = (...children) => { const td = document.createElement('td'); td.append(...children); return td; };
+    let focusTarget = null;
+    $('template-contact-rows').replaceChildren(...templateContacts.map((row, index) => {
+      const label = index ? `Contact type ${index + 1}` : 'Contact type';
+      const type = document.createElement('select');
+      type.setAttribute('aria-label', label);
+      for (const option of ['', ...Object.keys(TEMPLATE_CONTACT_TYPES)]) {
+        const item = document.createElement('option');
+        item.setAttribute('value', option); item.textContent = option || 'None';
+        if (option === row.type) item.setAttribute('selected', '');
+        type.append(item);
+      }
+      type.addEventListener('change', () => { row.type = type.value; renderTemplateContacts(); showTemplatePreview(); });
+      const call = document.createElement('select');
+      call.setAttribute('aria-label', `${label} call`);
+      for (const option of TEMPLATE_CALL_OPTIONS) {
+        const item = document.createElement('option');
+        item.setAttribute('value', option); item.textContent = option;
+        if (option === row.call) item.setAttribute('selected', '');
+        call.append(item);
+      }
+      call.addEventListener('change', () => { row.call = call.value; renderTemplateContacts(); showTemplatePreview(); });
+      const count = document.createElement('input');
+      count.setAttribute('type', 'number'); count.setAttribute('min', '1'); count.setAttribute('max', String(TEMPLATE_MAX_CONTACT_IDS.Digital));
+      count.setAttribute('aria-label', `${label} count`);
+      // All Call is a single contact per system.
+      count.setAttribute('value', row.call === 'All Call' ? '1' : String(row.count));
+      count.addEventListener('input', () => { row.count = count.value; showTemplatePreview(); });
+      if (!row.type) { call.setAttribute('disabled', ''); count.setAttribute('disabled', ''); }
+      else if (row.call === 'All Call') count.setAttribute('disabled', '');
+      if (focus === row) focusTarget = type;
+      const action = index
+        ? templateButton('×', `Remove ${label}`, 'template-remove', () => { templateContacts.splice(templateContacts.indexOf(row), 1); renderTemplateContacts(); showTemplatePreview(); })
+        : templateButton('+ Add contact type', 'Add another contact type', 'template-add', () => {
+          const used = new Set(templateContacts.map(item => item.type));
+          const added = { type: Object.keys(TEMPLATE_CONTACT_TYPES).find(option => !used.has(option)) || 'Capacity Plus', call: 'Group Call', count: 10 };
+          templateContacts.push(added);
+          renderTemplateContacts(added); showTemplatePreview();
+        });
+      const tr = document.createElement('tr');
+      if (index) tr.setAttribute('class', 'template-subrow');
+      tr.append(cell(type), cell(call), cell(count), cell(action));
+      return tr;
+    }));
+    focusTarget?.focus?.();
+  }
+  function templateContactOptions() {
+    const rows = templateContacts.filter(row => row.type);
+    if (!rows.length) return null;
+    const groups = rows.map(row => {
+      const { callType, prefix } = TEMPLATE_CONTACT_TYPES[row.type] || {};
+      if (!callType) throw new Error('New layout: select a supported contact type.');
+      if (row.call === 'All Call') return { label: row.type, callType, allCall: true };
+      const count = Number(row.count);
+      if (!Number.isInteger(count) || count < 1 || count > TEMPLATE_MAX_CONTACT_IDS[callType]) throw new Error(`New layout: ${row.type} contacts must be a whole number from 1 through ${TEMPLATE_MAX_CONTACT_IDS[callType]}.`);
+      return { label: row.type, callType, prefix, count };
+    });
+    const allCalls = new Set();
+    for (const group of groups.filter(item => item.allCall)) {
+      if (allCalls.has(group.callType)) throw new Error(`New layout: a codeplug has one ${group.callType} All Call; Capacity Plus and Linked Capacity Plus share it.`);
+      allCalls.add(group.callType);
+    }
+    const idTotals = {}, nameTotals = {};
+    for (const group of groups.filter(item => !item.allCall)) {
+      idTotals[group.callType] = (idTotals[group.callType] || 0) + group.count;
+      nameTotals[group.prefix] = (nameTotals[group.prefix] || 0) + group.count;
+    }
+    for (const [callType, total] of Object.entries(idTotals)) {
+      if (total > TEMPLATE_MAX_CONTACT_IDS[callType]) throw new Error(`New layout: ${total} ${callType} contacts exceed the ${TEMPLATE_MAX_CONTACT_IDS[callType]} available${callType === 'Capacity Plus' ? ' Capacity Plus Call IDs (Linked Capacity Plus shares them)' : ''}.`);
+    }
+    // Names number per prefix and Call IDs per call type, through all rows.
+    const nextId = {}, nextName = {}, contacts = [];
+    for (const group of groups) {
+      if (group.allCall) { contacts.push({ name: TEMPLATE_ALL_CALL_NAMES[group.callType], id: ALL_CALL_IDS[group.callType], callType: group.callType, label: 'All Call' }); continue; }
+      for (let i = 0; i < group.count; i++) {
+        const number = nextName[group.prefix] = (nextName[group.prefix] || 0) + 1;
+        const id = nextId[group.callType] = (nextId[group.callType] || 0) + 1;
+        contacts.push({ name: `${group.prefix} ${String(number).padStart(Math.max(2, String(nameTotals[group.prefix]).length), '0')}`, id: String(id), callType: group.callType, label: group.label });
+      }
+    }
+    return contacts;
+  }
+  function templateContactSummary(contacts) {
+    const labels = [...new Set(contacts.map(contact => contact.label))];
+    return `${contacts.length} contact${contacts.length === 1 ? '' : 's'} (${labels.map(label => `${contacts.filter(contact => contact.label === label).length} ${label}`).join(', ')})`;
+  }
+  // Template contacts replace the pasted ones, except CPS's own scaffold
+  // contacts that combine several call types (such as Call1), which import
+  // preserves and the simplified sheet cannot recreate.
+  function removeContacts(doc) {
+    const category = directChildren(doc.documentElement, 'category').find(node => node.getAttribute('name') === 'PCRContacts');
+    recordsForCategory(category).filter(node => activeContactTypes(node).length < 2).forEach(node => node.remove());
+  }
+  // Voice list members name Channel Pool channels, so they are emptied with
+  // the pool; the voice lists themselves are kept.
+  function clearChannelPool(doc) {
+    const category = (name) => directChildren(doc.documentElement, 'category').find(node => node.getAttribute('name') === name);
+    for (const pool of recordsForCategory(category('Zone')).filter(isChannelPoolRecord)) {
+      for (const collection of directChildren(pool, 'collection').filter(node => node.getAttribute('name') === 'ZoneItems')) collection.replaceChildren();
+    }
+    for (const list of recordsForCategory(category('CapacityPlusVoiceList'))) {
+      directChildren(list, 'multifield').filter(node => node.getAttribute('name') === 'CapacityPlusVoiceListItems').forEach(node => node.replaceChildren());
+    }
   }
   function templateOptions() {
     if (!$('template-enabled').checked) return null;
@@ -504,7 +625,7 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
     };
     const channels = zones.flatMap(zone => zone.channels);
     const types = ZONE_CHANNEL_TYPE_OPTIONS.filter(type => channels.some(channel => channel.type === type));
-    return { zones, defaults, types, channelCount: channels.length };
+    return { zones, defaults, types, channelCount: channels.length, contacts: templateContactOptions(), clearPool: $('template-clear-pool').checked };
   }
   function templateSummary(template) {
     const byType = template.types.map(type => `${template.zones.flatMap(zone => zone.channels).filter(channel => channel.type === type).length} ${type}`).join(', ');
@@ -526,8 +647,9 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
   function addTemplateRows(presentations, template) {
     const rowFor = (presentation, values) => presentation.headers.map(header => values[presentation.columnMap[header]] ?? '');
     const sheet = (label) => presentations.find(item => item.sheet.label === label)?.presentation;
-    const zones = sheet('Zones'), channels = sheet('Zone Channels'), security = sheet('Security');
+    const zones = sheet('Zones'), channels = sheet('Zone Channels'), security = sheet('Security'), contacts = sheet('Contacts');
     if (!zones || !channels) throw new Error('New zone layout: the Zones and Zone Channels sheets are unavailable.');
+    for (const contact of template.contacts || []) contacts?.rows.push(rowFor(contacts, { '__contact_name': contact.name, '__contact_id': contact.id, '__contact_type': contact.callType }));
     for (const zone of template.zones) {
       zones.rows.push(rowFor(zones, { '@alias': zone.name }));
       for (const channel of zone.channels) channels.rows.push(rowFor(channels, { ...templateChannelValues(channel.type, template.defaults), '__parent_label': zone.name, '@alias': channel.name }));
@@ -542,7 +664,14 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
     $('template-fields').disabled = !enabled;
     const preview = $('template-preview');
     if (!enabled) { message(preview, ''); return; }
-    try { message(preview, `Export will replace the pasted zones with ${templateSummary(templateOptions())}.`, 'ok'); }
+    try {
+      const template = templateOptions();
+      message(preview, [
+        `Export will replace the pasted zones with ${templateSummary(template)}.`,
+        template.contacts ? `Contacts will be replaced with ${templateContactSummary(template.contacts)}.` : 'The pasted contacts will be kept.',
+        template.clearPool ? 'The Channel Pool will be cleared.' : ''
+      ].filter(Boolean).join(' '), 'ok');
+    }
     catch (err) { message(preview, err.message, 'error'); }
   }
   function requireXlsx() { if (!XLSX?.utils) throw new Error('The bundled Excel library has not loaded. Restart the app and try again.'); }
@@ -588,7 +717,10 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
       const template = templateOptions();
       let model;
       if (template) {
-        const doc = parseXml(input.value); removeZones(doc); model = buildModel(doc);
+        const doc = parseXml(input.value); removeZones(doc);
+        if (template.contacts) removeContacts(doc);
+        if (template.clearPool) clearChannelPool(doc);
+        model = buildModel(doc);
       } else { model = currentModel || buildModel(parseXml(input.value)); currentModel = model; }
       showModel(model);
       const wb = XLSX.utils.book_new();
@@ -604,7 +736,9 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
         ['Capacity Plus Voice Lists', 'Check Voice List membership in CPS after pasting. Some CPS clipboard operations may not transfer those members.'],
         ['Import safety checks', 'unArchive verifies the visible workbook values and important links before enabling Copy XML. If it finds a problem, it clears the output and explains what must be corrected.'],
         ['Before fleet deployment', 'Run CPS validation, save and reopen the codeplug, and program and function-test representative radios before programming the fleet. Keep an untouched backup codeplug.'],
-        ...(template ? [['New zone layout', `This workbook replaces the source zones with ${templateSummary(template)}. Rename the zones and channels as needed, then complete every generated channel — ${templateRequirements(template)}. You may also change a row's Channel Type. Import stops and names the first incomplete channel until every one is filled in. Scan lists, roam lists, and buttons that pointed at the old zone channels must be rechecked in CPS.`]] : [])
+        ...(template ? [['New zone layout', `This workbook replaces the source zones with ${templateSummary(template)}. Rename the zones and channels as needed, then complete every generated channel — ${templateRequirements(template)}. You may also change a row's Channel Type. Import stops and names the first incomplete channel until every one is filled in. Scan lists, roam lists, and buttons that pointed at the old zone channels must be rechecked in CPS.`]] : []),
+        ...(template?.contacts ? [['New contacts', `The source contacts were replaced with ${templateContactSummary(template.contacts)}, numbered with sequential Call IDs. Rename them and change their Call IDs as needed, then pick them in the Zone Channels Contact Name column. Capacity Plus and Linked Capacity Plus channels both use Capacity Plus contacts. All Call contacts keep their reserved IDs (Capacity Plus 255, Digital 16777215). CPS scaffold contacts that combine several call types are kept.`]] : []),
+        ...(template?.clearPool ? [['Channel Pool cleared', 'The source Channel Pool channels were removed, and voice list members that pointed at them were emptied. Add the Capacity Plus repeater channels to Channel Pool and their members to Voice Lists before importing.']] : [])
       ]);
       instructions['!cols'] = [{ wch: 27 }, { wch: 118 }];
       XLSX.utils.book_append_sheet(wb, instructions, 'READ FIRST');
@@ -679,7 +813,7 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(meta), '_CPS_META');
       wb.Workbook = wb.Workbook || {}; wb.Workbook.Sheets = wb.SheetNames.map(n => ({ Hidden: RESERVED.has(n) ? 1 : 0 }));
       const saved = await saveFile(await workbookBlobWithFrozenHeaders(wb), 'codeplug-editable.xlsx', { name: 'Excel Workbook', extensions: ['xlsx'] });
-      const savedText = template ? `Workbook saved with a new layout of ${templateSummary(template)}. Before importing, complete each generated channel — ${templateRequirements(template)}.` : 'Workbook saved.';
+      const savedText = template ? `Workbook saved with a new layout of ${templateSummary(template)}${template.contacts ? ` and ${templateContactSummary(template.contacts)}` : ''}${template.clearPool ? ', with the Channel Pool cleared' : ''}. Before importing, complete each generated channel — ${templateRequirements(template)}.` : 'Workbook saved.';
       message(xmlStatus, saved ? savedText : 'Workbook save cancelled.', saved ? 'ok' : '');
     } catch (err) { message(xmlStatus, err.message, 'error'); }
   }
@@ -798,6 +932,14 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
       const replacement = buildContactForType(doc, candidates, type);
       node.replaceWith(replacement);
       return replacement;
+    }
+    // A new row with the system's reserved All Call ID becomes a complete CPS
+    // All Call record. A second All Call for the same system is reported as a
+    // duplicate Call ID by validateReferences.
+    if (ALL_CALL_IDS[type] === id) {
+      const allCall = blueprintNode(doc, CPS_BLUEPRINTS.allCallContacts?.[type]);
+      if (!allCall) throw new Error(`The internal ${type} All Call blueprint is unavailable.`);
+      return allCall;
     }
     validateRegularContactId(name, id, type);
     return buildContactForType(doc, candidates, type);
@@ -1417,7 +1559,9 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
   $('export-workbook').addEventListener('click', exportWorkbook);
   $('template-enabled').addEventListener('change', showTemplatePreview);
   ['input', 'change'].forEach(type => $('template-zones').addEventListener(type, () => { renderTemplateZones(); showTemplatePreview(); }));
+  $('template-clear-pool').addEventListener('change', showTemplatePreview);
   renderTemplateZones();
+  renderTemplateContacts();
   $('paste-clipboard').addEventListener('click', async () => {
     try {
       input.value = await readClipboardText();

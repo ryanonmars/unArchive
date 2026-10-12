@@ -33,6 +33,13 @@ const contacts = Object.fromEntries(Object.entries(contactTypes).map(([label, co
   if (!template) throw new Error(`Missing ${label} contact blueprint.`);
   return [label, serialize(template)];
 }));
+// CPS creates one All Call contact per system with a reserved ID (Digital
+// 16777215, Capacity Plus 255). New All Call contacts copy those records.
+const allCallContacts = Object.fromEntries(['Digital', 'Capacity Plus'].map(label => {
+  const template = documents.flatMap(doc => records(doc, 'PCRContacts')).find(contact => activeContactCollection(contact, contactTypes[label]) && isAllCall(contact));
+  if (!template) throw new Error(`Missing ${label} All Call contact blueprint.`);
+  return [label, serialize(template)];
+}));
 // Fixture channels reference contacts, keys, and lists that belong to the
 // fixture codeplug. A new channel must not silently inherit them, so reset
 // every per-codeplug reference to CPS's own "nothing selected" form and turn
@@ -92,14 +99,16 @@ const NAME_FIELDS = new Set([
 ]);
 const ID_FIELDS = new Set(['DU_CALLLSTID', 'CAPPLUSUCL_CALLLSTID', 'LCPSTLST_SITEID']);
 const FREQUENCY_FIELDS = new Set(['CP_RXFREQ', 'CP_TXFREQ']);
-const scrub = (xml, placeholder) => {
+// All Call IDs are fixed by CPS rather than taken from the fixture, so
+// keepIds leaves them in place.
+const scrub = (xml, placeholder, { keepIds = false } = {}) => {
   const node = new DOMParser().parseFromString(`<config>${xml}</config>`, 'application/xml').documentElement.firstElementChild;
   const visit = (element, inRegularCall) => {
     if (element.hasAttribute('alias') && element.getAttribute('alias') !== 'Channel Pool') element.setAttribute('alias', placeholder);
     const name = element.getAttribute('name');
     if (element.tagName === 'field' && element.textContent !== 'Channel Pool') {
       if (NAME_FIELDS.has(name)) element.textContent = placeholder;
-      else if (ID_FIELDS.has(name) || (inRegularCall && name === 'PeudoCallId')) element.textContent = '1';
+      else if (!keepIds && (ID_FIELDS.has(name) || (inRegularCall && name === 'PeudoCallId'))) element.textContent = '1';
       else if (FREQUENCY_FIELDS.has(name)) element.textContent = '450.0000';
     }
     const regularCall = inRegularCall || (element.tagName === 'collection' && ['DigitalCalls', 'CapacityPlusCalls'].includes(name));
@@ -108,10 +117,11 @@ const scrub = (xml, placeholder) => {
   visit(node, false);
   return serialize(node);
 };
-const scrubAll = (values, placeholder) => Object.fromEntries(Object.entries(values).map(([key, xml]) => [key, scrub(xml, placeholder)]));
+const scrubAll = (values, placeholder, options) => Object.fromEntries(Object.entries(values).map(([key, xml]) => [key, scrub(xml, placeholder, options)]));
 
 const blueprints = {
   contacts: scrubAll(contacts, 'CONTACT'),
+  allCallContacts: scrubAll(allCallContacts, 'ALL CALL', { keepIds: true }),
   channels: scrubAll(channels, 'CHANNEL'),
   zone: scrub(serialize(emptyCollection(regularZones[0], 'ZoneItems')), 'ZONE'),
   channelPool: scrub(serialize(emptyCollection(pool, 'ZoneItems')), 'ZONE'),
