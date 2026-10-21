@@ -43,7 +43,7 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
   const FOCUSED_COLUMNS = {
     Zones: ['@alias'],
     'Zone Channels': ['@alias', 'field:CP_UKPPERS', 'field:CP_PERSTYPE', 'field:CP_VOICEPRIVACYEN', 'field:CP_ENHCPRVCYIT', 'field:CP_RASDATAITEM', 'field:CP_TRUNKCHANLISTIT', 'field:CP_LCPSTLSTIT', 'field:CP_LCPALATRM', 'field:CP_RXFREQ', 'field:CP_TXFREQ', 'field:CP_COLORCODE', 'field:CP_TXINHXPLEN', 'field:CP_MYCALLADCRTR', 'field:CP_RXONLYEN', 'field:CP_SCANLISTIT'],
-    'Channel Pool': ['@alias', 'field:CP_PERSTYPE', 'field:CP_RXFREQ', 'field:CP_TXFREQ', 'field:CP_COLORCODE', 'field:CP_RXONLYEN', 'field:CP_SCANLISTIT']
+    'Channel Pool': ['@alias', 'field:CP_UKPPERS', 'field:CP_PERSTYPE', 'field:CP_RXFREQ', 'field:CP_TXFREQ', 'field:CP_COLORCODE', 'field:CP_RXONLYEN', 'field:CP_SCANLISTIT']
   };
   const CHANNEL_TYPE_LABELS = {
     CAPPLUSSYSCONV: 'Capacity Plus',
@@ -71,8 +71,9 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
   const ALL_CALL_IDS = { Digital: '16777215', 'Capacity Plus': '255' };
   const ZONE_CHANNEL_TYPE_OPTIONS = ['Analog', 'Digital', 'Capacity Plus', 'Linked Capacity Plus'];
   // Channel Pool rows always import into the pool, whatever Assigned Zone
-  // says. Capacity Plus Voice is the repeater channel that voice lists name;
-  // Digital is the only other pool type offered.
+  // says. Capacity Plus Voice is the repeater channel that voice lists name.
+  // A Digital pool channel keeps a contact, such as a Digital All Call, in the
+  // radio for scanning without putting it in a zone everyone can select.
   const CHANNEL_POOL_ZONE_OPTIONS = ['Channel Pool'];
   const CHANNEL_POOL_TYPE_OPTIONS = ['Capacity Plus Voice', 'Digital'];
   const TRUE_FALSE_OPTIONS = ['True', 'False'];
@@ -799,7 +800,7 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
         CalcPr: { calcMode: 'auto', fullCalcOnLoad: '1', forceFullCalc: '1' }
       };
       for (const { sheet, presentation } of presentations) {
-        const choices = sheet.label === 'Zone Channels' ? namedChoices : sheet.label === 'Site Lists' ? { '__site_voice_list': { formula: 'unArchiveVoiceListNames', strict: false } } : sheet.label === 'Voice Lists' ? { '__voice_list_member': { formula: 'unArchiveChannelPoolNames', strict: true } } : {};
+        const choices = sheet.label === 'Zone Channels' ? namedChoices : sheet.label === 'Channel Pool' ? { 'field:CP_UKPPERS': namedChoices['field:CP_UKPPERS'] } : sheet.label === 'Site Lists' ? { '__site_voice_list': { formula: 'unArchiveVoiceListNames', strict: false } } : sheet.label === 'Voice Lists' ? { '__voice_list_member': { formula: 'unArchiveChannelPoolNames', strict: true } } : {};
         const fixedChoices = sheet.label === 'Contacts' ? { '__contact_type': CONTACT_CALL_TYPE_OPTIONS } : sheet.label === 'Zone Channels' ? { 'field:CP_PERSTYPE': ZONE_CHANNEL_TYPE_OPTIONS, 'field:CP_VOICEPRIVACYEN': TRUE_FALSE_OPTIONS, 'field:CP_LCPALATRM': TRUE_FALSE_OPTIONS, 'field:CP_RXONLYEN': TRUE_FALSE_OPTIONS } : sheet.label === 'Channel Pool' ? { '__parent_label': CHANNEL_POOL_ZONE_OPTIONS, 'field:CP_PERSTYPE': CHANNEL_POOL_TYPE_OPTIONS, 'field:CP_RXONLYEN': TRUE_FALSE_OPTIONS } : sheet.label === 'Security' ? { '__privacy_type': SECURITY_PRIVACY_TYPE_OPTIONS } : {};
         XLSX.utils.book_append_sheet(wb, worksheetFromPresentation(presentation, choices, fixedChoices), sheet.sheetName);
         meta.push([sheet.sheetName, sheet.id, sheet.category, sheet.collectionName, sheet.layout, JSON.stringify(presentation.columnMap)]);
@@ -1118,6 +1119,13 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
     if (['DGTLCONV6PT25', 'CAPPLUSVOICECONV'].includes(type) && (requiredMissing('CP_COLORCODE', colorCode) || (colorCode && (!/^\d+$/.test(colorCode) || Number(colorCode) > 15)))) throw new Error(`${alias}: Color Code is required and must be a whole number from 0 through 15.`);
     if (colorCode && (!/^\d+$/.test(colorCode) || Number(colorCode) > 15)) throw new Error(`${alias}: Color Code must be a whole number from 0 through 15.`);
     const contact = text(row['field:CP_UKPPERS']).trim();
+    if (info.sheet === 'Channel Pool' && 'field:CP_UKPPERS' in row) {
+      const hasContact = directChildren(node, 'field').some(field => field.getAttribute('name') === 'CP_UKPPERS');
+      if (!hasContact && contact && contact.toUpperCase() !== 'NONE') throw new Error(`${alias}: ${displayValue('field:CP_PERSTYPE', type)} channels have no Contact Name in CPS. Leave it blank.`);
+      // A pool channel's contact is optional; blank means none.
+      if (hasContact && !contact) row['field:CP_UKPPERS'] = 'NONE';
+      if (!hasContact) row['field:CP_UKPPERS'] = '';
+    }
     if (info.sheet === 'Zone Channels' && ['DGTLCONV6PT25', 'CAPPLUSSYSCONV', 'LINKEDCAPPLUSSYSCONV'].includes(type) && (!contact || contact.toUpperCase() === 'NONE') && (!wasExisting || typeChanged || (originalValues.get('CP_UKPPERS') && originalValues.get('CP_UKPPERS').toUpperCase() !== 'NONE'))) throw new Error(`${alias}: ${displayValue('field:CP_PERSTYPE', type)} needs a Contact Name.`);
     const voiceList = text(row['field:CP_TRUNKCHANLISTIT']).trim();
     if (info.sheet === 'Zone Channels' && type === 'CAPPLUSSYSCONV' && (!voiceList || voiceList.toUpperCase() === 'NONE') && (!wasExisting || typeChanged || (originalValues.get('CP_TRUNKCHANLISTIT') && originalValues.get('CP_TRUNKCHANLISTIT').toUpperCase() !== 'NONE'))) throw new Error(`${alias}: Capacity Plus needs a Voice List.`);
