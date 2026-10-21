@@ -1072,6 +1072,143 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
     }
     return available.find(node => node.getAttribute('alias') === text(row['@alias'])) || null;
   }
+  // Channel identity. A channel row is the record its hidden ID names, or a
+  // new channel built from its CPS template; a matching name never picks a
+  // record, so a new row cannot inherit an old channel's hidden settings.
+  const CREATE_ALL_NEW_LABEL = 'Create all channels as new';
+  // Besides the name, what tells one channel from another. A kept row that was
+  // renamed and changed two or more of these probably holds a different
+  // channel typed over an old row, which the summary points out.
+  const CHANNEL_IDENTITY_FIELDS = ['CP_PERSTYPE', 'CP_RXFREQ', 'CP_TXFREQ', 'CP_COLORCODE', 'CP_UKPPERS', 'CP_TRUNKCHANLISTIT', 'CP_LCPSTLSTIT'];
+  function identityText(value) {
+    const trimmed = text(value).trim();
+    return trimmed !== '' && Number.isFinite(Number(trimmed)) ? String(Number(trimmed)) : trimmed.toUpperCase();
+  }
+  // The value the export wrote for a channel record in one visible column.
+  function exportedChannelValue(node, technical) {
+    if (technical === '__parent_label') {
+      const parent = node.parentElement?.parentElement;
+      return parent?.getAttribute('alias') || parent?.getAttribute('name') || '';
+    }
+    if (technical.startsWith('@')) return node.getAttribute(technical.slice(1)) || '';
+    if (technical.startsWith('field:')) return displayValue(technical, directFieldValue(node, technical.slice(6)));
+    return '';
+  }
+  function channelPlace(node) { return `"${node.getAttribute('alias') || 'Unnamed channel'}" (${exportedChannelValue(node, '__parent_label') || 'no zone'})`; }
+  // Matches each channel row that carries a hidden record ID to its record
+  // before any row is applied, so row order cannot hand one channel's record
+  // to another. Rows without an ID are new channels. Conflicts that would
+  // attach the wrong record are collected and refused together.
+  function claimChannelRecords(info, sourceRows, columnMap, originals, byId, createAllNew, seenIds, channelTabs) {
+    const claims = sourceRows.map(() => null);
+    if (createAllNew) return claims;
+    if (!Object.values(columnMap).includes('_record_id')) throw new Error(`${info.sheet}: this workbook has no hidden record IDs, so unArchive cannot tell which channels already exist. Export the workbook again, or tick "${CREATE_ALL_NEW_LABEL}" to build every channel from its CPS template.`);
+    const columns = Object.values(columnMap).filter(key => key !== '_record_id' && !key.startsWith('label:'));
+    const visible = source => Object.fromEntries(Object.entries(source).map(([header, value]) => [columnMap[header] || header, value]));
+    const signature = values => columns.map(key => identityText(values[key])).join('\u0001');
+    const exported = new Map(originals.map(node => [node, signature(Object.fromEntries(columns.map(key => [key, exportedChannelValue(node, key)])))]));
+    const bySignature = new Map();
+    for (const [node, sig] of exported) bySignature.set(sig, [...(bySignature.get(sig) || []), node]);
+    const rowName = values => `"${text(values['@alias']).trim() || 'Unnamed channel'}" (${text(values.__parent_label).trim() || (info.sheet === 'Channel Pool' ? 'Channel Pool' : 'no zone')})`;
+    const problems = [];
+    sourceRows.forEach((source, index) => {
+      const id = text(source._record_id).trim();
+      if (!id) return;
+      const values = visible(source);
+      if (seenIds.has(id)) {
+        problems.push(`${info.sheet}: row ${rowName(values)} has the same hidden record ID as another row, so it was probably copied from it. Add new channels in blank rows, clear the copied row's hidden _record_id cell, or tick "${CREATE_ALL_NEW_LABEL}".`);
+        return;
+      }
+      seenIds.add(id);
+      const node = byId.get(id);
+      if (node && originals.includes(node) && recordMatchesSheet(node, info)) { claims[index] = node; return; }
+      const otherTab = channelTabs.get(node) || '';
+      problems.push(otherTab && otherTab !== info.sheet
+        ? `${info.sheet}: row ${rowName(values)} carries the hidden record ID of a ${otherTab} channel. A channel cannot move between Zone Channels and Channel Pool; delete the row and add the channel again in a blank row on this tab, or tick "${CREATE_ALL_NEW_LABEL}".`
+        : `${info.sheet}: row ${rowName(values)} has a hidden record ID (${id}) that does not belong to a channel on this tab. Clear that row's hidden _record_id cell to add it as a new channel, or export the workbook again.`);
+    });
+    // A row that equals, in every visible column, the exported row of a
+    // different channel and not its own is provably attached to the wrong
+    // record: the hidden ID column was left out of a sort or paste. Renames,
+    // zone moves, and type changes edit a row's own values and never match
+    // another channel exactly, so they are not affected.
+    sourceRows.forEach((source, index) => {
+      const own = claims[index];
+      if (!own) return;
+      const sig = signature(visible(source));
+      if (sig === exported.get(own)) return;
+      const others = (bySignature.get(sig) || []).filter(node => node !== own);
+      if (others.length !== 1 || (bySignature.get(exported.get(own)) || []).length !== 1) return;
+      problems.push(`${info.sheet}: the row ${rowName(visible(source))} exactly matches the exported row of ${channelPlace(others[0])}, but its hidden record ID belongs to ${channelPlace(own)}. The hidden ID column was probably left out of a sort or paste. Undo that change or export the workbook again; to build these channels from scratch, tick "${CREATE_ALL_NEW_LABEL}".`);
+    });
+    if (problems.length) throw new Error(`${problems.slice(0, 4).join('  ')}${problems.length > 4 ? ` (+${problems.length - 4} more)` : ''}`);
+    return claims;
+  }
+  // Reference fields a channel holds that the workbook does not show, such as
+  // an RX group list or emergency system. A channel created as new starts
+  // with the template's none for each.
+  function hiddenChannelReferences(node, visibleKeys) {
+    return directChildren(node, 'field').filter(field => {
+      const name = field.getAttribute('name');
+      return field.hasAttribute('Name') && /(IT|ITEM)$/.test(name) && !visibleKeys.has(fieldKey(name)) && text(field.textContent).trim() && text(field.textContent).trim().toUpperCase() !== 'NONE';
+    }).map(field => friendlyField(field.getAttribute('name')));
+  }
+  // Names that lists outside the zones (scan lists, roam lists, and similar)
+  // hold for channels. Voice lists are rebuilt and checked from their sheet.
+  function channelNamesInLists(doc, channelNames) {
+    const refs = [];
+    for (const category of directChildren(doc.documentElement, 'category')) {
+      const name = category.getAttribute('name');
+      if (['Zone', 'CapacityPlusVoiceList'].includes(name)) continue;
+      for (const record of recordsForCategory(category)) for (const multi of record.getElementsByTagName('multifield')) {
+        for (const value of directChildren(multi, 'value')) if (channelNames.has(value.textContent)) refs.push({ list: `${categoryLabel(name)} "${record.getAttribute('alias') || record.getAttribute('name')}"`, channel: value.textContent });
+      }
+    }
+    return refs;
+  }
+  function allChannelNames(doc) {
+    const zone = directChildren(doc.documentElement, 'category').find(node => node.getAttribute('name') === 'Zone');
+    return new Set(recordsForCategory(zone).flatMap(parent => directChildren(parent, 'collection').filter(node => node.getAttribute('name') === 'ZoneItems').flatMap(collection => directChildren(collection, 'set').map(channel => channel.getAttribute('alias')))));
+  }
+  function listNames(names, limit = 8) { return `${names.slice(0, limit).join(', ')}${names.length > limit ? ` and ${names.length - limit} more` : ''}`; }
+  // An informational account of what an import did on one channel tab.
+  function channelImportSummary(info, outcome, removed, originalState, createAllNew, visibleKeys) {
+    const lines = [], line = text => lines.push({ text }), note = text => lines.push({ text, note: true });
+    const named = items => listNames(items.map(item => item.alias));
+    if (createAllNew) {
+      line(`${outcome.created.length} channels created as new from their CPS templates${removed.length ? `, replacing ${removed.length} old channels` : ''}.`);
+      const dropped = new Map();
+      for (const node of removed) for (const label of hiddenChannelReferences(node, visibleKeys)) dropped.set(label, (dropped.get(label) || 0) + 1);
+      if (dropped.size) note(`The old channels also had settings this workbook does not show, which the new channels do not carry: ${[...dropped].map(([label, count]) => `${label} on ${count}`).join(', ')}. Set them in CPS if they are still needed.`);
+      return { title: info.sheet, lines };
+    }
+    const removedNames = new Set(removed.map(node => originalState.get(node).alias));
+    if (outcome.kept) line(`${outcome.kept} existing channels kept, with their other settings.`);
+    if (outcome.renamed.length) line(`Renamed: ${listNames(outcome.renamed)}.`);
+    if (outcome.moved.length) line(`Moved to another zone: ${listNames(outcome.moved)}.`);
+    if (outcome.retyped.length) line(`Changed type, rebuilt from the new type's CPS template: ${listNames(outcome.retyped)}.`);
+    if (outcome.created.length) line(`${outcome.created.length} new channels created from CPS templates: ${named(outcome.created)}.`);
+    const replacements = outcome.created.filter(item => removedNames.has(item.alias));
+    if (replacements.length) note(`New channels that replace a removed channel of the same name, without its other settings: ${named(replacements)}.`);
+    if (removed.length) line(`${removed.length} channels removed: ${listNames(removed.map(node => originalState.get(node).alias))}.`);
+    if (outcome.heavy.length) note(`Renamed and changed in several other ways, but these rows kept their existing channel records and so their other settings: ${listNames(outcome.heavy)}. If they are meant to be new channels, tick "${CREATE_ALL_NEW_LABEL}" and import again.`);
+    return { title: info.sheet, lines };
+  }
+  function renderImportSummary(sections) {
+    const summaryEl = $('import-summary');
+    summaryEl.replaceChildren();
+    for (const section of sections) {
+      if (!section.lines.length) continue;
+      const heading = document.createElement('h3'); heading.textContent = section.title;
+      const list = document.createElement('ul');
+      for (const line of section.lines) {
+        const item = document.createElement('li'); item.textContent = line.text;
+        if (line.note) item.className = 'note';
+        list.append(item);
+      }
+      summaryEl.append(heading, list);
+    }
+  }
   function reorderSheetRecords(info, orderedNodes) {
     if (!orderedNodes.length) return;
     if (info.collectionName) {
@@ -1560,6 +1697,8 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
   }
   function importWorkbook(file) {
     $('copy-output').disabled = true; $('download-xml').disabled = true; output.value = '';
+    const createAllNew = Boolean($('import-as-new')?.checked);
+    renderImportSummary([]);
     const reader = new FileReader(); reader.onload = () => {
       try {
         requireXlsx(); const wb = XLSX.read(reader.result, { type: 'array', raw: false });
@@ -1577,6 +1716,9 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
         let verifiedRows = 0; const seenVisibleRecordIds = new Set();
         const securityInfo = meta.find(info => info.layout === 'security');
         const securityMap = securityInfo && wb.Sheets[securityInfo.sheet] ? securityMapFromRows(rowsFromSheet(wb, securityInfo.sheet), originalSecurityAliases) : null;
+        const listReferencesBefore = channelNamesInLists(doc, allChannelNames(doc));
+        const channelTabs = new Map([...byId.values()].filter(node => node.parentElement?.getAttribute('name') === 'ZoneItems').map(node => [node, isChannelPoolRecord(node.parentElement.parentElement) ? 'Channel Pool' : 'Zone Channels']));
+        const summarySections = [];
         for (const info of meta) {
           if (!wb.Sheets[info.sheet]) continue;
           const sourceRows = rowsFromSheet(wb, info.sheet);
@@ -1586,9 +1728,15 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
           if (info.layout === 'security') { verifiedRows += sourceRows.length; continue; }
           let columnMap = {}; try { columnMap = JSON.parse(info.column_map_json || '{}'); } catch { throw new Error(`The workbook field map for ${info.sheet} is invalid.`); }
           const originals = originalRecordsForSheet(info, byId), matched = new Set(), orderedNodes = [];
-          for (const source of sourceRows) {
+          const channelSheet = info.collectionName === 'ZoneItems';
+          const claims = channelSheet ? claimChannelRecords(info, sourceRows, columnMap, originals, byId, createAllNew, seenVisibleRecordIds, channelTabs) : null;
+          const channelState = node => ({ alias: text(node.getAttribute('alias')), zone: exportedChannelValue(node, '__parent_label'), type: directFieldValue(node, 'CP_PERSTYPE'), identity: CHANNEL_IDENTITY_FIELDS.map(name => identityText(directFieldValue(node, name))) });
+          const originalState = new Map(channelSheet ? originals.map(node => [node, channelState(node)]) : []);
+          const outcome = { kept: 0, renamed: [], moved: [], retyped: [], created: [], heavy: [] };
+          for (const [index, source] of sourceRows.entries()) {
             const row = Object.fromEntries(Object.entries(source).map(([header, value]) => { const technical = columnMap[header] || header; return [technical, cpsValue(technical, value)]; }));
-            const workbookId = text(row._record_id).trim();
+            // Channel rows were matched by claimChannelRecords above.
+            const workbookId = channelSheet ? '' : text(row._record_id).trim();
             if (workbookId) {
               if (seenVisibleRecordIds.has(workbookId)) throw new Error(`${info.sheet}: hidden record ID ${workbookId} appears more than once. Add new records using a blank row instead of copying an entire existing row.`);
               seenVisibleRecordIds.add(workbookId);
@@ -1596,7 +1744,7 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
               if (!identified || !originals.includes(identified) || !recordMatchesSheet(identified, info)) throw new Error(`${info.sheet}: hidden record ID ${workbookId} does not identify a valid record on this sheet.`);
             }
             if (info.sheet === 'Zones' && !text(row['@alias']).trim()) throw new Error('Zones: every row needs a Name / Alias.');
-            const originalNode = findExistingRecord(doc, info, row, originals, matched, byId);
+            const originalNode = channelSheet ? claims[index] : findExistingRecord(doc, info, row, originals, matched, byId);
             let node = originalNode;
             if (info.layout === 'contacts' && node) node = prepareContactNode(doc, node, row, originals);
             let visibleParent = parentFromVisibleLabel(doc, info, row.__parent_label);
@@ -1632,8 +1780,21 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
             verifiedRows++;
             if (originalNode && originals.includes(originalNode)) matched.add(originalNode);
             orderedNodes.push(node);
+            if (channelSheet) {
+              const now = channelState(node), was = originalNode && originalState.get(originalNode);
+              if (!was) outcome.created.push(now);
+              else {
+                outcome.kept++;
+                if (was.alias !== now.alias) outcome.renamed.push(`${was.alias} → ${now.alias}`);
+                if (was.zone !== now.zone && info.sheet !== 'Channel Pool') outcome.moved.push(`${now.alias} (${was.zone} → ${now.zone})`);
+                if (was.type !== now.type) outcome.retyped.push(`${now.alias} (${displayValue('field:CP_PERSTYPE', was.type)} → ${displayValue('field:CP_PERSTYPE', now.type)})`);
+                if (was.alias !== now.alias && now.identity.filter((value, i) => value !== was.identity[i]).length >= 2) outcome.heavy.push(now.alias);
+              }
+            }
           }
-          originals.filter(node => !matched.has(node)).forEach(node => node.remove());
+          const removed = originals.filter(node => !matched.has(node));
+          if (channelSheet) summarySections.push(channelImportSummary(info, outcome, removed, originalState, createAllNew, new Set(Object.values(columnMap))));
+          removed.forEach(node => node.remove());
           reorderSheetRecords(info, orderedNodes);
         }
         placeDependentListsAfterZones(doc);
@@ -1647,6 +1808,12 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
           message(outputStatus, `Fix these before copying: ${issues.slice(0, 4).join('  ')}${issues.length > 4 ? ` (+${issues.length - 4} more)` : ''}`, 'error');
         } else {
           $('copy-output').disabled = false; $('download-xml').disabled = false;
+          // A list outside the zones that named a channel now gone keeps that
+          // name, so it is reported for fixing in CPS.
+          const channelNamesAfter = allChannelNames(doc);
+          const stale = listReferencesBefore.filter(ref => !channelNamesAfter.has(ref.channel));
+          if (stale.length) summarySections.push({ title: 'Other lists', lines: [...stale.slice(0, 8).map(ref => ({ text: `${ref.list} still lists "${ref.channel}", which is no longer a channel. Update that list in CPS.`, note: true })), ...(stale.length > 8 ? [{ text: `…and ${stale.length - 8} more list entries.`, note: true }] : [])] });
+          renderImportSummary(summarySections);
           const after = planningCounts(doc);
           message(outputStatus, `Ready to paste: verified ${verifiedRows} visible workbook rows. ${after.contacts} contacts, ${after.zones} zones, ${after.channels} zone channels (was ${before.contacts}, ${before.zones}, ${before.channels}).`, 'ok');
         }

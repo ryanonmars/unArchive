@@ -91,13 +91,22 @@ export function appendRow(workbook, sheet, values) {
   replaceRows(workbook, sheet, rows);
 }
 
-export async function importWorkbook(workbook) {
+// createAllNew sets the "Create all channels as new" option for this import
+// only, so one test cannot leak it into the next.
+export async function importWorkbook(workbook, { createAllNew = false } = {}) {
   status.textContent = '';
+  const createAllNewBox = document.getElementById('import-as-new');
+  if (createAllNewBox) createAllNewBox.checked = createAllNew;
   const data = new Uint8Array(XLSX.write(workbook, { type: 'array', bookType: 'xlsx' }));
   Object.defineProperty(workbookPicker, 'files', { configurable: true, value: [{ data }] });
   workbookPicker.dispatchEvent(new Event('change'));
   await waitFor(() => status.textContent, 'workbook import');
-  return { message: status.textContent, ok: status.className.includes('ok'), xml: output.value };
+  if (createAllNewBox) createAllNewBox.checked = false;
+  const summaryItems = [...(document.getElementById('import-summary')?.querySelectorAll('li') || [])];
+  return {
+    message: status.textContent, ok: status.className.includes('ok'), xml: output.value,
+    summary: summaryItems.map(item => item.textContent), notes: summaryItems.filter(item => item.className === 'note').map(item => item.textContent)
+  };
 }
 
 export function xmlDocument(xml) { return new DOMParser().parseFromString(xml, 'application/xml'); }

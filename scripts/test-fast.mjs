@@ -528,4 +528,245 @@ for (const pool of [true, false]) {
   assert.deepEqual(['CP_ENHCPRVCYIT', 'CP_RASDATAITEM'].map(name => [value(channelIn(zoneNone, 'DIG TALK'), name), fieldOf(channelIn(zoneNone, 'DIG TALK'), name).getAttribute('Name')]), [['NONE', 'None'], ['NONE', 'None']]);
 }
 
+// Channel record identity. A row with a hidden record ID is that channel; a
+// row without one is a new channel from its CPS template, whatever its name.
+// "Create all channels as new" builds every channel from its template.
+{
+  // Old channels carry a hidden marker the workbook never shows, so any
+  // inheritance is visible: CP_TOT on most types, CP_SARQ_AT on Capacity
+  // Plus Voice. DIG TALK also holds a hidden RX group list, and SCAN A lists
+  // DIG TALK by name.
+  const MARK = '987';
+  const markerField = node => fieldOf(node, 'CP_TOT') ? 'CP_TOT' : 'CP_SARQ_AT';
+  const markedDoc = xmlDocument(syntheticCodeplug({ keys: true }));
+  for (const channel of allChannels(markedDoc)) fieldOf(channel, markerField(channel)).textContent = MARK;
+  const tgList = fieldOf(allChannels(markedDoc).find(item => item.getAttribute('alias') === 'DIG TALK'), 'CP_TGLISTIT');
+  tgList.textContent = 'GROUP A'; tgList.setAttribute('Name', 'GROUP A');
+  const scanMembers = directElements(directElements(category(markedDoc, 'ScanItems'), 'set')[0], 'multifield')[0];
+  const member = markedDoc.createElement('value'); member.textContent = 'DIG TALK'; scanMembers.append(member);
+  const markedXml = '<?xml version="1.0" encoding="utf-8" standalone="yes"?>\n' + markedDoc.documentElement.toString();
+  const marked = xmlDocument(markedXml);
+  const markedBytes = await exportWorkbookFrom(markedXml);
+  const book = () => workbookFrom(markedBytes);
+  const markerOf = (doc, alias) => { const channel = channelIn(doc, alias); return value(channel, markerField(channel)); };
+  const templateMarker = type => value(xmlDocument(`<r>${CPS_BLUEPRINTS.channels[type]}</r>`).documentElement.firstElementChild, type === 'CAPPLUSVOICECONV' ? 'CP_SARQ_AT' : 'CP_TOT');
+  const recordId = (workbook, sheet, alias) => { const rows = rowsFor(workbook, sheet); return rows.find(row => row[1] === alias)[rows[0].indexOf('_record_id')]; };
+  const setRows = (workbook, sheet, change) => { const rows = rowsFor(workbook, sheet); change(rows, Object.fromEntries(rows[0].map((header, index) => [header, index]))); replaceRows(workbook, sheet, rows); return workbook; };
+  const run = async (workbook, options) => { const result = await importWorkbook(workbook, options); assert.equal(result.ok, true, result.message); return { ...result, doc: xmlDocument(result.xml) }; };
+  const refuse = async (workbook, pattern, options) => { const result = await importWorkbook(workbook, options); assert.equal(result.ok, false, `Expected ${pattern}`); assert.equal(result.xml, ''); assert.match(result.message, pattern); assert.deepEqual(result.summary, []); return result; };
+  // Everything outside the zones keeps its exact records.
+  const othersUnchanged = (doc, label) => {
+    for (const name of ['PCRContacts', 'CapacityPlusVoiceList', 'CapacityPlusSiteList', 'ScanItems', 'RoamList']) assert.deepEqual(directElements(category(doc, name)).map(canonical), directElements(category(marked, name)).map(canonical), `${label}: ${name} untouched`);
+  };
+
+  // An unchanged import keeps every record and says so.
+  const same = await run(book());
+  for (const original of allChannels(marked)) assert.deepEqual(canonical(channelIn(same.doc, original.getAttribute('alias'))), canonical(original));
+  assert.ok(same.summary.includes('8 existing channels kept, with their other settings.') && same.summary.includes('3 existing channels kept, with their other settings.'), same.summary.join(' | '));
+  assert.deepEqual(same.notes, []);
+
+  // Same-name replacement: the old row deleted and a new one typed with the
+  // same name, below or above the others. The new channel is built from the
+  // template; nothing hidden carries over, the old record is removed.
+  const newDigTalk = { 'Assigned Zone': 'ZONE A', 'Name / Alias': 'DIG TALK', 'Contact Name': 'DIG 2', 'Channel Type': 'Digital', 'Receive Frequency': '461.0250', 'Transmit Frequency': '466.0250', 'Color Code': '2' };
+  for (const position of ['below', 'above']) {
+    const workbook = setRows(book(), 'Zone Channels', (rows, col) => {
+      rows.splice(rows.findIndex(row => row[1] === 'DIG TALK'), 1);
+      const fresh = rows[0].map(header => newDigTalk[header] ?? '');
+      if (position === 'above') rows.splice(1, 0, fresh); else rows.push(fresh);
+    });
+    const { doc, notes } = await run(workbook);
+    assert.equal(markerOf(doc, 'DIG TALK'), templateMarker('DGTLCONV6PT25'), `${position}: the new DIG TALK does not inherit the hidden setting`);
+    assert.deepEqual(['CP_ENHCPRVCYIT', 'CP_RASDATAITEM', 'CP_TGLISTIT', 'CP_VOICEPRIVACYEN'].map(name => value(channelIn(doc, 'DIG TALK'), name)), ['NONE', 'NONE', 'NONE', 'False']);
+    assert.equal(shape(channelIn(doc, 'DIG TALK')), blueprintShape('DGTLCONV6PT25'));
+    assert.equal(allChannels(doc).filter(item => item.getAttribute('alias') === 'DIG TALK').length, 1);
+    assert.ok(notes.some(note => /replace a removed channel of the same name, without its other settings: DIG TALK/.test(note)), notes.join(' | '));
+    othersUnchanged(doc, `same-name replacement ${position}`);
+  }
+
+  // A renamed channel keeps its record even when a new row reusing its old
+  // name sits above it: row order no longer hands the record to the new row.
+  const reordered = setRows(book(), 'Zone Channels', (rows, col) => {
+    rows.find(row => row[1] === 'DIG TALK')[col['Name / Alias']] = 'DIG TALK 2';
+    rows.splice(1, 0, rows[0].map(header => newDigTalk[header] ?? ''));
+  });
+  const reorderedDoc = (await run(reordered)).doc;
+  assert.equal(markerOf(reorderedDoc, 'DIG TALK 2'), MARK, 'The renamed channel keeps its record.');
+  assert.equal(value(channelIn(reorderedDoc, 'DIG TALK 2'), 'CP_TGLISTIT'), 'GROUP A');
+  assert.equal(markerOf(reorderedDoc, 'DIG TALK'), templateMarker('DGTLCONV6PT25'), 'The new same-name row is a new channel.');
+
+  // A deleted hidden ID makes the row a new channel, never a name match.
+  const idCleared = setRows(book(), 'Zone Channels', (rows, col) => { rows.find(row => row[1] === 'CP TALK')[col._record_id] = ''; });
+  const idClearedRun = await run(idCleared);
+  assert.equal(markerOf(idClearedRun.doc, 'CP TALK'), templateMarker('CAPPLUSSYSCONV'));
+  assert.deepEqual(['CP_ENHCPRVCYIT', 'CP_RASDATAITEM'].map(name => value(channelIn(idClearedRun.doc, 'CP TALK'), name)), ['PRIV A', 'RAS A'], 'Its visible keys come from the row.');
+  assert.ok(idClearedRun.notes.some(note => /same name, without its other settings: CP TALK/.test(note)));
+
+  // Retyped in another zone without an ID: new there, removed from ZONE A.
+  const crossZone = book();
+  appendRow(crossZone, 'Zones', { 'Name / Alias': 'ZONE B' });
+  setRows(crossZone, 'Zone Channels', (rows, col) => { const row = rows.find(item => item[1] === 'DIG TALK'); row[col['Assigned Zone']] = 'ZONE B'; row[col._record_id] = ''; });
+  const crossDoc = (await run(crossZone)).doc;
+  assert.equal(channelIn(crossDoc, 'DIG TALK').parentElement.parentElement.getAttribute('alias'), 'ZONE B');
+  assert.equal(markerOf(crossDoc, 'DIG TALK'), templateMarker('DGTLCONV6PT25'));
+
+  // Legitimate edits keep the record: rename, zone move, and two channels
+  // exchanging names. A type change rebuilds from the new type's template.
+  const edits = book();
+  appendRow(edits, 'Zones', { 'Name / Alias': 'ZONE B' });
+  setRows(edits, 'Zone Channels', (rows, col) => {
+    const row = alias => rows.find(item => item[1] === alias);
+    row('ANA TALK')[col['Name / Alias']] = 'ANA RENAMED';
+    row('DIG RXONLY')[col['Assigned Zone']] = 'ZONE B';
+    const [rxOnly, talk] = [row('CP RXONLY'), row('CP TALK')];
+    rxOnly[col['Name / Alias']] = 'CP TALK'; talk[col['Name / Alias']] = 'CP RXONLY';
+    Object.assign(row('LCP TALK'), { [col['Channel Type']]: 'Digital', [col['Contact Name']]: 'DIG 1', [col['Site List']]: '', [col['Auto Roam']]: '', [col['Receive Frequency']]: '461.8000', [col['Transmit Frequency']]: '461.8000', [col['Color Code']]: '1' });
+  });
+  const editRun = await run(edits);
+  for (const alias of ['ANA RENAMED', 'DIG RXONLY', 'CP TALK', 'CP RXONLY']) assert.equal(markerOf(editRun.doc, alias), MARK, `${alias} keeps its record`);
+  assert.equal(value(channelIn(editRun.doc, 'CP TALK'), 'CP_RXONLYEN'), 'True', 'Exchanged names: CP TALK is the old CP RXONLY record.');
+  assert.equal(channelIn(editRun.doc, 'DIG RXONLY').parentElement.parentElement.getAttribute('alias'), 'ZONE B');
+  assert.equal(markerOf(editRun.doc, 'LCP TALK'), templateMarker('DGTLCONV6PT25'), 'A type change is rebuilt from the new template.');
+  for (const expected of [/^Renamed: .*ANA TALK → ANA RENAMED/, /^Moved to another zone: DIG RXONLY \(ZONE A → ZONE B\)/, /^Changed type, rebuilt from the new type's CPS template: LCP TALK \(Linked Capacity Plus → Digital\)/]) assert.ok(editRun.summary.some(line => expected.test(line)), `${expected} in ${editRun.summary.join(' | ')}`);
+  assert.deepEqual(editRun.notes, [], 'Ordinary edits raise no notes.');
+
+  // Swapped or misaligned IDs, as when the hidden column is left out of a
+  // sort: provable, so refused. Rotating three rows' IDs is refused too.
+  await refuse(setRows(book(), 'Zone Channels', (rows, col) => {
+    const a = rows.find(row => row[1] === 'DIG TALK'), b = rows.find(row => row[1] === 'ANA TALK');
+    [a[col._record_id], b[col._record_id]] = [b[col._record_id], a[col._record_id]];
+  }), /Zone Channels: the row "DIG TALK" \(ZONE A\) exactly matches the exported row of "DIG TALK" \(ZONE A\), but its hidden record ID belongs to "ANA TALK" \(ZONE A\)\. The hidden ID column was probably left out of a sort or paste\./);
+  await refuse(setRows(book(), 'Zone Channels', (rows, col) => {
+    const ids = rows.slice(1, 4).map(row => row[col._record_id]);
+    rows.slice(1, 4).forEach((row, index) => { row[col._record_id] = ids[(index + 1) % 3]; });
+  }), /exactly matches the exported row of .* but its hidden record ID belongs to .*\(\+?|exactly matches the exported row/);
+  await refuse(setRows(book(), 'Channel Pool', (rows, col) => {
+    const a = rows.find(row => row[1] === 'VOICE 1'), b = rows.find(row => row[1] === 'VOICE 2');
+    [a[col._record_id], b[col._record_id]] = [b[col._record_id], a[col._record_id]];
+  }), /Channel Pool: the row "VOICE 1" \(Channel Pool\) exactly matches the exported row of "VOICE 1" \(Channel Pool\)/);
+
+  // A typed-over row keeps its record unless rebuild mode is on; the summary
+  // points that out.
+  const typedOver = () => setRows(book(), 'Zone Channels', (rows, col) => {
+    const row = rows.find(item => item[1] === 'DIG TALK');
+    rows[0].forEach((header, index) => { if (header !== '_record_id') row[index] = ''; });
+    Object.entries({ 'Assigned Zone': 'ZONE A', 'Name / Alias': 'CH 1', 'Contact Name': 'DIG 1', 'Channel Type': 'Digital', 'Receive Frequency': '461.9000', 'Transmit Frequency': '461.9000', 'Color Code': '1' }).forEach(([header, cell]) => { row[col[header]] = cell; });
+  });
+  const keptOver = await run(typedOver());
+  assert.equal(markerOf(keptOver.doc, 'CH 1'), MARK);
+  assert.ok(keptOver.notes.some(note => /Renamed and changed in several other ways, but these rows kept their existing channel records .*: CH 1\. If they are meant to be new channels, tick "Create all channels as new"/.test(note)), keptOver.notes.join(' | '));
+  const newOver = await run(typedOver(), { createAllNew: true });
+  assert.equal(markerOf(newOver.doc, 'CH 1'), templateMarker('DGTLCONV6PT25'));
+
+  // Duplicate IDs (a copied row): refused normally, ignored in rebuild mode.
+  const copied = () => setRows(book(), 'Zone Channels', (rows, col) => { const copy = [...rows.find(row => row[1] === 'DIG TALK')]; copy[col['Name / Alias']] = 'DIG TALK COPY'; rows.push(copy); });
+  await refuse(copied(), /Zone Channels: row "DIG TALK COPY" \(ZONE A\) has the same hidden record ID as another row, so it was probably copied from it\. Add new channels in blank rows, clear the copied row's hidden _record_id cell, or tick "Create all channels as new"\./);
+  const copiedNew = await run(copied(), { createAllNew: true });
+  for (const alias of ['DIG TALK', 'DIG TALK COPY']) {
+    assert.equal(markerOf(copiedNew.doc, alias), templateMarker('DGTLCONV6PT25'));
+    assert.deepEqual(['CP_ENHCPRVCYIT', 'CP_RASDATAITEM'].map(name => value(channelIn(copiedNew.doc, alias), name)), ['PRIV A', 'RAS A'], `${alias} takes its visible keys from the row`);
+  }
+
+  // Invalid IDs: unknown, or from the other channel tab. Rebuild mode ignores them.
+  await refuse(setRows(book(), 'Zone Channels', (rows, col) => { rows.find(row => row[1] === 'ANA TALK')[col._record_id] = 'n999999'; }), /Zone Channels: row "ANA TALK" \(ZONE A\) has a hidden record ID \(n999999\) that does not belong to a channel on this tab\. Clear that row's hidden _record_id cell to add it as a new channel, or export the workbook again\./);
+  const moveToPool = () => {
+    const workbook = book();
+    const zone = rowsFor(workbook, 'Zone Channels'), zoneHeaders = zone[0];
+    const moved = zone.splice(zone.findIndex(row => row[1] === 'DIG TALK'), 1)[0];
+    replaceRows(workbook, 'Zone Channels', zone);
+    return setRows(workbook, 'Channel Pool', rows => rows.push(rows[0].map(header => header === 'Assigned Zone' ? 'Channel Pool' : zoneHeaders.includes(header) ? moved[zoneHeaders.indexOf(header)] : '')));
+  };
+  await refuse(moveToPool(), /Channel Pool: row "DIG TALK" \(Channel Pool\) carries the hidden record ID of a Zone Channels channel\. A channel cannot move between Zone Channels and Channel Pool; delete the row and add the channel again in a blank row on this tab, or tick "Create all channels as new"\./);
+  const movedNew = await run(moveToPool(), { createAllNew: true });
+  assert.ok(poolChannels(movedNew.doc).some(item => item.getAttribute('alias') === 'DIG TALK'));
+
+  // A channel tab without hidden IDs cannot keep any channel's settings, so it
+  // is refused unless every channel is created as new.
+  const noIds = () => {
+    const workbook = book();
+    for (const sheet of ['Zone Channels', 'Channel Pool']) {
+      const rows = rowsFor(workbook, sheet), drop = rows[0].indexOf('_record_id');
+      replaceRows(workbook, sheet, rows.map(row => row.filter((_, index) => index !== drop)));
+    }
+    return setRows(workbook, '_CPS_META', rows => { for (const row of rows.filter(item => ['Zone Channels', 'Channel Pool'].includes(item[0]))) { const map = JSON.parse(row[5]); delete map._record_id; row[5] = JSON.stringify(map); } });
+  };
+  await refuse(noIds(), /Zone Channels: this workbook has no hidden record IDs, so unArchive cannot tell which channels already exist\. Export the workbook again, or tick "Create all channels as new"/);
+  assert.equal(allChannels((await run(noIds(), { createAllNew: true })).doc).length, allChannels(marked).length);
+
+  // A list outside the zones that named a removed channel is reported.
+  const removedScanned = await run(setRows(book(), 'Zone Channels', rows => rows.splice(rows.findIndex(row => row[1] === 'DIG TALK'), 1)));
+  assert.ok(removedScanned.notes.some(note => /Scan Items "SCAN A" still lists "DIG TALK", which is no longer a channel\. Update that list in CPS\./.test(note)), removedScanned.notes.join(' | '));
+  assert.deepEqual(directElements(category(removedScanned.doc, 'ScanItems')).map(canonical), directElements(category(marked, 'ScanItems')).map(canonical), 'The scan list itself is left unchanged.');
+}
+
+// The primary workflow: clear an existing configuration and build a new one,
+// reusing common channel names, by typing over the old rows, by deleting them
+// and adding new rows, or with "Create all channels as new". No new channel
+// may carry anything hidden from an old one, and nothing outside the
+// channels is rebuilt or dropped.
+{
+  const MARK = '987';
+  const doc = xmlDocument(syntheticCodeplug({ keys: true, poolKeys: true }));
+  for (const channel of allChannels(doc)) fieldOf(channel, fieldOf(channel, 'CP_TOT') ? 'CP_TOT' : 'CP_SARQ_AT').textContent = MARK;
+  const sourceXml = '<?xml version="1.0" encoding="utf-8" standalone="yes"?>\n' + doc.documentElement.toString();
+  const original = xmlDocument(sourceXml);
+  const workbookBytes = await exportWorkbookFrom(sourceXml);
+  // The new configuration reuses names such as DIG TALK and VOICE 1.
+  const zonePlan = [
+    { 'Name / Alias': 'CH 1', 'Contact Name': 'DIG 1', 'Channel Type': 'Digital', 'Receive Frequency': '451.1000', 'Transmit Frequency': '456.1000', 'Color Code': '5' },
+    { 'Name / Alias': 'CH 2', 'Contact Name': 'DIG 2', 'Channel Type': 'Digital', 'Receive Frequency': '451.2000', 'Transmit Frequency': '456.2000', 'Color Code': '5', 'Privacy Enabled': 'True', 'Privacy Key Alias': 'PRIV A' },
+    { 'Name / Alias': 'DIG TALK', 'Contact Name': 'DIG 1', 'Channel Type': 'Digital', 'Receive Frequency': '451.3000', 'Transmit Frequency': '456.3000', 'Color Code': '5' },
+    { 'Name / Alias': 'CP 1', 'Contact Name': 'CP 1', 'Channel Type': 'Capacity Plus', 'Voice List': 'VOICE A' },
+    { 'Name / Alias': 'ANA TALK', 'Channel Type': 'Analog', 'Receive Frequency': '452.1000', 'Transmit Frequency': '452.1000' }
+  ].map(row => ({ 'Assigned Zone': 'ZONE A', ...row }));
+  const poolPlan = [
+    { 'Name / Alias': 'VOICE 1', 'Channel Type': 'Capacity Plus Voice', 'Receive Frequency': '453.1000', 'Transmit Frequency': '458.1000', 'Color Code': '6' },
+    { 'Name / Alias': 'VOICE 2', 'Channel Type': 'Capacity Plus Voice', 'Receive Frequency': '453.2000', 'Transmit Frequency': '458.2000', 'Color Code': '6' },
+    { 'Name / Alias': 'CH 1', 'Contact Name': 'DIG ALL CALL', 'Channel Type': 'Digital', 'Receive Frequency': '453.3000', 'Transmit Frequency': '458.3000', 'Color Code': '6' }
+  ].map(row => ({ 'Assigned Zone': 'Channel Pool', ...row }));
+  const typeFor = label => Object.entries({ Digital: 'DGTLCONV6PT25', Analog: 'ANLGCONV', 'Capacity Plus': 'CAPPLUSSYSCONV', 'Capacity Plus Voice': 'CAPPLUSVOICECONV' }).find(([name]) => name === label)[1];
+  // Every new channel matches its CPS template except the values the plan sets.
+  const assertBuiltFromTemplates = (built, label) => {
+    for (const [sheet, plan, parentOf] of [['Zone Channels', zonePlan, () => 'ZONE A'], ['Channel Pool', poolPlan, () => 'CHANNELPOOL']]) {
+      const channels = allChannels(built).filter(item => (sheet === 'Channel Pool') === (item.parentElement.parentElement.getAttribute('key') === 'CHANNELPOOL'));
+      assert.deepEqual(channels.map(item => item.getAttribute('alias')), plan.map(row => row['Name / Alias']), `${label}: ${sheet} holds exactly the new plan`);
+      channels.forEach((channel, index) => {
+        const template = xmlDocument(`<r>${CPS_BLUEPRINTS.channels[typeFor(plan[index]['Channel Type'])]}</r>`).documentElement.firstElementChild;
+        assert.equal(shape(channel), shape(template), `${label}: ${channel.getAttribute('alias')} has its template's fields`);
+        const marker = fieldOf(channel, 'CP_TOT') ? 'CP_TOT' : 'CP_SARQ_AT';
+        assert.equal(value(channel, marker), value(template, marker), `${label}: ${channel.getAttribute('alias')} inherits nothing hidden`);
+        const expectKeys = plan[index]['Privacy Key Alias'] || (fieldOf(template, 'CP_ENHCPRVCYIT') ? 'NONE' : undefined);
+        assert.equal(value(channel, 'CP_ENHCPRVCYIT'), expectKeys, `${label}: ${channel.getAttribute('alias')} privacy key`);
+        if (fieldOf(template, 'CP_RASDATAITEM')) assert.equal(value(channel, 'CP_RASDATAITEM'), 'NONE', `${label}: ${channel.getAttribute('alias')} RAS key`);
+      });
+    }
+    for (const name of ['PCRContacts', 'CapacityPlusSiteList', 'ScanItems', 'RoamList']) assert.deepEqual(directElements(category(built, name)).map(canonical), directElements(category(original, name)).map(canonical), `${label}: ${name} kept`);
+    assert.deepEqual(directElements(directElements(category(built, 'CapacityPlusVoiceList'), 'set')[0], 'multifield')[0].children.length, 2, `${label}: voice list members still resolve`);
+  };
+  const fill = (rows, plan) => [rows[0], ...plan.map(entry => rows[0].map(header => entry[header] ?? ''))];
+  // a. Typed over the old rows, which keep their hidden IDs, with rebuild mode.
+  const overtyped = workbookFrom(workbookBytes);
+  for (const [sheet, plan] of [['Zone Channels', zonePlan], ['Channel Pool', poolPlan]]) {
+    const rows = rowsFor(overtyped, sheet), idColumn = rows[0].indexOf('_record_id');
+    const next = fill(rows, plan);
+    next.slice(1).forEach((row, index) => { row[idColumn] = rows[index + 1]?.[idColumn] || ''; });
+    replaceRows(overtyped, sheet, next);
+  }
+  const rebuilt = await importWorkbook(overtyped, { createAllNew: true });
+  assert.equal(rebuilt.ok, true, rebuilt.message);
+  assertBuiltFromTemplates(xmlDocument(rebuilt.xml), 'typed over, rebuild mode');
+  assert.ok(rebuilt.summary.includes('5 channels created as new from their CPS templates, replacing 8 old channels.'), rebuilt.summary.join(' | '));
+  assert.ok(rebuilt.summary.includes('3 channels created as new from their CPS templates, replacing 3 old channels.'), rebuilt.summary.join(' | '));
+  assert.ok(!rebuilt.notes.some(note => /still lists/.test(note)));
+  // b. Old rows deleted and the plan entered in blank rows, without rebuild mode.
+  const retyped = workbookFrom(workbookBytes);
+  for (const [sheet, plan] of [['Zone Channels', zonePlan], ['Channel Pool', poolPlan]]) replaceRows(retyped, sheet, fill(rowsFor(retyped, sheet), plan));
+  const fresh = await importWorkbook(retyped);
+  assert.equal(fresh.ok, true, fresh.message);
+  assertBuiltFromTemplates(xmlDocument(fresh.xml), 'deleted and retyped');
+  assert.ok(fresh.notes.some(note => /same name, without its other settings: DIG TALK, ANA TALK/.test(note)), fresh.notes.join(' | '));
+  // c. Rebuild mode on an export whose rows were deleted and retyped gives the same result.
+  assertBuiltFromTemplates(xmlDocument((await importWorkbook(retyped, { createAllNew: true })).xml), 'deleted and retyped, rebuild mode');
+}
+
 console.log('Fast tests passed.');
