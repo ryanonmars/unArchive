@@ -6,10 +6,25 @@ import * as XLSX from 'xlsx';
 import JSZip from 'jszip';
 import { CPS_BLUEPRINTS } from '../blueprints.generated.js';
 import {
-  document, exportWorkbookFrom, workbookFrom, rowsFor, replaceRows, appendRow, importWorkbook,
+  document, exportWorkbookFrom, workbookFrom, rowsFor, replaceRows, appendRow, importWorkbook as harnessImport,
   xmlDocument, directElements, category, allChannels, fieldOf, channelType
 } from './test-harness.mjs';
 import { syntheticCodeplug } from './test-fixture.mjs';
+
+// The import summary is for people, so it never shows CPS's internal
+// field names, record types, category names, or enum codes. Every import in
+// this suite is checked.
+const INTERNAL_TEXT = [
+  /\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b/,
+  /\b(ANLGCONV|DGTLCONV6PT25|CAPPLUSSYSCONV|LINKEDCAPPLUSSYSCONV|CAPPLUSVOICECONV|CHANNELPOOL|ScanItems|RoamList|PCRContacts|CapacityPlus\w*)\b/,
+  /\b[A-Z0-9]{13,}\b/,
+  /Channel — |Off Set|OffSet/
+];
+function assertPlainSummary(result) {
+  for (const line of result.summary || []) for (const pattern of INTERNAL_TEXT) assert.doesNotMatch(line, pattern, `Summary shows internal text: ${line}`);
+  return result;
+}
+const importWorkbook = async (...args) => assertPlainSummary(await harnessImport(...args));
 
 const sourceXml = syntheticCodeplug();
 const source = xmlDocument(sourceXml);
@@ -685,12 +700,10 @@ for (const pool of [true, false]) {
   assert.ok(keptOver.notes.some(note => /Renamed and changed in several other ways, but these rows kept their existing channel records .*: CH 1\. If they are meant to be new channels, tick "Create all channels as new"/.test(note)), keptOver.notes.join(' | '));
   const newOver = await run(typedOver(), { createAllNew: true });
   assert.equal(markerOf(newOver.doc, 'CH 1'), templateMarker('DGTLCONV6PT25'));
-  // The note names hidden settings that differed from the template and so
-  // were reset, and leaves out ones that matched it, such as GPS Revert Channel.
-  const resetNote = newOver.notes.find(note => /differ from the CPS template defaults the new channels use/.test(note)) || '';
-  assert.match(resetNote, /Time-Out Timer on 8/);
-  assert.match(resetNote, /RX Group List on 1/);
-  assert.doesNotMatch(resetNote, /GPS|GPSRVRTPERSIT/);
+  // The note counts old channels whose settings outside the workbook were
+  // reset, without naming internal fields.
+  assert.ok(newOver.notes.includes('8 channels were rebuilt using CPS template defaults. Some settings not included in the workbook were reset. Review these settings in CPS if needed.'), newOver.notes.join(' | '));
+  assert.ok(newOver.notes.includes('3 channels were rebuilt using CPS template defaults. Some settings not included in the workbook were reset. Review these settings in CPS if needed.'), newOver.notes.join(' | '));
 
   // Duplicate IDs (a copied row): refused normally, ignored in rebuild mode.
   const copied = () => setRows(book(), 'Zone Channels', (rows, col) => { const copy = [...rows.find(row => row[1] === 'DIG TALK')]; copy[col['Name / Alias']] = 'DIG TALK COPY'; rows.push(copy); });
@@ -729,7 +742,7 @@ for (const pool of [true, false]) {
 
   // A list outside the zones that named a removed channel is reported.
   const removedScanned = await run(setRows(book(), 'Zone Channels', rows => rows.splice(rows.findIndex(row => row[1] === 'DIG TALK'), 1)));
-  assert.ok(removedScanned.notes.some(note => /Scan Items "SCAN A" still lists "DIG TALK", which is no longer a channel\. Update that list in CPS\./.test(note)), removedScanned.notes.join(' | '));
+  assert.ok(removedScanned.notes.includes('The list "SCAN A" still lists "DIG TALK", which is no longer a channel. Update that list in CPS.'), removedScanned.notes.join(' | '));
   assert.deepEqual(directElements(category(removedScanned.doc, 'ScanItems')).map(canonical), directElements(category(marked, 'ScanItems')).map(canonical), 'The scan list itself is left unchanged.');
 }
 
@@ -801,6 +814,30 @@ for (const pool of [true, false]) {
   assert.ok(fresh.notes.some(note => /same name, without its other settings: DIG TALK, ANA TALK/.test(note)), fresh.notes.join(' | '));
   // c. Rebuild mode on an export whose rows were deleted and retyped gives the same result.
   assertBuiltFromTemplates(xmlDocument((await importWorkbook(retyped, { createAllNew: true })).xml), 'deleted and retyped, rebuild mode');
+}
+
+// The reported case: old channels with internal settings that differ from
+// the template (for example CP_DEVMEDFORINDDATACALL and OffSet) get one
+// plain, counted note when rebuilt, and none when nothing differed.
+{
+  const doc = xmlDocument(syntheticCodeplug());
+  const digital = allChannels(doc).filter(channel => channelType(channel) === 'DGTLCONV6PT25');
+  for (const channel of digital.slice(0, 2)) {
+    fieldOf(channel, 'CP_DEVMEDFORINDDATACALL').textContent = 'True';
+    fieldOf(channel, 'OffSet').textContent = '3.000000';
+  }
+  const changedBytes = await exportWorkbookFrom('<?xml version="1.0" encoding="utf-8" standalone="yes"?>\n' + doc.documentElement.toString());
+  const rebuilt = await importWorkbook(workbookFrom(changedBytes), { createAllNew: true });
+  assert.equal(rebuilt.ok, true, rebuilt.message);
+  assert.deepEqual(rebuilt.notes, ['2 channels were rebuilt using CPS template defaults. Some settings not included in the workbook were reset. Review these settings in CPS if needed.']);
+  assert.doesNotMatch(rebuilt.summary.join(' '), /DEVMEDFORINDDATACALL|OffSet|Off Set|3\.000000/);
+  const untouched = await importWorkbook(workbookFrom(bytes), { createAllNew: true });
+  assert.deepEqual(untouched.notes, [], 'No note when no old channel differed from its template.');
+  assert.ok(untouched.summary.every(line => /channels created as new from their CPS templates/.test(line)));
+  // The checker itself catches the text that used to appear.
+  assert.throws(() => assertPlainSummary({ summary: ['Old channels had settings: Channel — DEVMEDFORINDDATACALL on 25, Off Set on 25.'] }));
+  assert.throws(() => assertPlainSummary({ summary: ['Reset CP_TOT on 3 and STR_12PT5KHZ.'] }));
+  assert.throws(() => assertPlainSummary({ summary: ['Scan list in ScanItems.'] }));
 }
 
 console.log('Fast tests passed.');

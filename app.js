@@ -35,11 +35,6 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
     CP_TRUNKCHANLISTIT: 'Voice List', CP_LCPSTLSTIT: 'Site List', CP_LCPALATRM: 'Auto Roam',
     CP_ENHCPRVCYIT: 'Privacy Key Alias', CP_RASDATAITEM: 'RAS Key Alias', RC_RAS_PROPRIETARY_KEY_ID: 'RAS Proprietary Key ID',
     CP_TGLISTIT: 'RX Group List', CP_SCNROAMLISTIT: 'Scan List', CP_EMSYSIT: 'Emergency System', CP_UKPPERS: 'Contact Name',
-    CP_PHONESYSIT: 'Phone System', CP_DATAREVCHANLISTIT: 'Data Revert Channel List', CP_MANDOWNPROFILEITEM: 'Man Down Profile',
-    CP_TXSIGSYSIT: 'TX Signaling System', CP_RXSIGSYSIT: 'RX Signaling System', CP_GPSRVRTPERSIT: 'GPS Revert Channel',
-    CP_TOT: 'Time-Out Timer', CP_CHNLBWDTH: 'Channel Bandwidth', CP_TXTPLCODE: 'TX PL Code', CP_RXTPLCODE: 'RX PL Code',
-    CP_TXSQCHTY: 'TX Squelch Type', CP_XSQCHTY: 'RX Squelch Type', CP_TXTDPLCD: 'TX DPL Code', CP_RXDPLCD: 'RX DPL Code',
-    CP_TXTTPLFREQ: 'TX PL Frequency', CP_RXTPLFREQ: 'RX PL Frequency', CP_TALKAROUNDEN: 'Talkaround', CP_LONEWORKEN: 'Lone Worker',
     DU_CALLALIAS: 'Contact Name', DU_CALLLSTID: 'Call ID', DU_CALLTYPE: 'Call Type',
     CAPPLUSUCL_CALLALIAS: 'Contact Name', CAPPLUSUCL_CALLLSTID: 'Call ID',
     CAPPLUSUCL_CALLTYPE: 'Call Type', TP_TRUNKPERALIAS: 'Voice List Name',
@@ -1149,18 +1144,19 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
     if (problems.length) throw new Error(`${problems.slice(0, 4).join('  ')}${problems.length > 4 ? ` (+${problems.length - 4} more)` : ''}`);
     return claims;
   }
-  // Settings the workbook does not show where an old channel differs from its
-  // type's CPS template, such as a time slot, RX group list, or PL tone. A
-  // channel created as new has the template's value for each.
-  function hiddenChannelDifferences(node, visibleKeys) {
+  // Whether an old channel has any setting the workbook does not show that
+  // differs from its type's CPS template. A channel created as new has the
+  // template's value for each, so that setting was reset. The summary gives
+  // only a count: CPS names for these internal fields are not verified.
+  function hasHiddenChannelDifferences(node, visibleKeys) {
     const template = blueprintNode(node.ownerDocument, CPS_BLUEPRINTS.channels[directFieldValue(node, 'CP_PERSTYPE')]);
-    if (!template) return [];
-    return directChildren(node, 'field').filter(field => {
+    if (!template) return true;
+    return directChildren(node, 'field').some(field => {
       const name = field.getAttribute('name');
       if (visibleKeys.has(fieldKey(name)) || name === 'CP_CNVPERSALIAS') return false;
       const templateField = directChildren(template, 'field').find(item => item.getAttribute('name') === name);
       return templateField && text(templateField.textContent) !== text(field.textContent);
-    }).map(field => friendlyField(field.getAttribute('name')));
+    });
   }
   // Names that lists outside the zones (scan lists, roam lists, and similar)
   // hold for channels. Voice lists are rebuilt and checked from their sheet.
@@ -1170,7 +1166,7 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
       const name = category.getAttribute('name');
       if (['Zone', 'CapacityPlusVoiceList'].includes(name)) continue;
       for (const record of recordsForCategory(category)) for (const multi of record.getElementsByTagName('multifield')) {
-        for (const value of directChildren(multi, 'value')) if (channelNames.has(value.textContent)) refs.push({ list: `${categoryLabel(name)} "${record.getAttribute('alias') || record.getAttribute('name')}"`, channel: value.textContent });
+        for (const value of directChildren(multi, 'value')) if (channelNames.has(value.textContent)) refs.push({ list: `The list "${record.getAttribute('alias') || record.getAttribute('name')}"`, channel: value.textContent });
       }
     }
     return refs;
@@ -1186,10 +1182,8 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
     const named = items => listNames(items.map(item => item.alias));
     if (createAllNew) {
       line(`${outcome.created.length} channels created as new from their CPS templates${removed.length ? `, replacing ${removed.length} old channels` : ''}.`);
-      const dropped = new Map();
-      for (const node of removed) for (const label of hiddenChannelDifferences(node, visibleKeys)) dropped.set(label, (dropped.get(label) || 0) + 1);
-      const ranked = [...dropped].sort((a, b) => b[1] - a[1]);
-      if (ranked.length) note(`Old channels had settings this workbook does not show that differ from the CPS template defaults the new channels use: ${ranked.slice(0, 8).map(([label, count]) => `${label} on ${count}`).join(', ')}${ranked.length > 8 ? ` and ${ranked.length - 8} more` : ''}. Set them in CPS if they are still needed.`);
+      const reset = removed.filter(node => hasHiddenChannelDifferences(node, visibleKeys)).length;
+      if (reset) note(`${reset} ${reset === 1 ? 'channel was' : 'channels were'} rebuilt using CPS template defaults. Some settings not included in the workbook were reset. Review these settings in CPS if needed.`);
       return { title: info.sheet, lines };
     }
     const removedNames = new Set(removed.map(node => originalState.get(node).alias));
