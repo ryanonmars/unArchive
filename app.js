@@ -1103,7 +1103,7 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
     // Read before fields the channel type lacks are cleared below, so a value
     // entered for an unsupported field is reported instead of dropped.
     const requested = (key) => key in row ? text(row[key]).trim() : '';
-    const requestedContact = requested('field:CP_UKPPERS'), requestedScanList = requested(SCAN_LIST_KEY);
+    const requestedContact = requested('field:CP_UKPPERS'), requestedScanList = requested(SCAN_LIST_KEY), requestedReceiveOnly = requested('field:CP_RXONLYEN');
     const originalScanList = node ? directFieldValue(node, SCAN_LIST_FIELD) : '';
     const originalValues = new Map(['CP_RXFREQ', 'CP_TXFREQ', 'CP_COLORCODE', 'CP_UKPPERS', 'CP_TRUNKCHANLISTIT', 'CP_LCPSTLSTIT'].map(name => [name, node ? directFieldValue(node, name).trim() : '']));
     const typeChanged = Boolean(node && originalType !== type);
@@ -1149,6 +1149,12 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
       // A pool channel's contact is optional; blank means none.
       if (hasContact && !contact) row['field:CP_UKPPERS'] = 'NONE';
       if (!hasContact) row['field:CP_UKPPERS'] = '';
+    }
+    // Capacity Plus Voice has no Receive Only in CPS. Any value, even False,
+    // would add a field its record does not have.
+    if ('field:CP_RXONLYEN' in row && !hasField('CP_RXONLYEN')) {
+      if (requestedReceiveOnly) throw new Error(`${alias}: ${displayValue('field:CP_PERSTYPE', type)} channels have no Receive Only setting in CPS. Leave Receive Only blank.`);
+      row['field:CP_RXONLYEN'] = '';
     }
     if (SCAN_LIST_KEY in row) {
       const isNone = !requestedScanList || requestedScanList.toUpperCase() === 'NONE';
