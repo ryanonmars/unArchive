@@ -655,6 +655,7 @@ for (const pool of [true, false]) {
   assert.equal(channelIn(editRun.doc, 'DIG RXONLY').parentElement.parentElement.getAttribute('alias'), 'ZONE B');
   assert.equal(markerOf(editRun.doc, 'LCP TALK'), templateMarker('DGTLCONV6PT25'), 'A type change is rebuilt from the new template.');
   for (const expected of [/^Renamed: .*ANA TALK → ANA RENAMED/, /^Moved to another zone: DIG RXONLY \(ZONE A → ZONE B\)/, /^Changed type, rebuilt from the new type's CPS template: LCP TALK \(Linked Capacity Plus → Digital\)/]) assert.ok(editRun.summary.some(line => expected.test(line)), `${expected} in ${editRun.summary.join(' | ')}`);
+  assert.ok(editRun.summary.includes('7 existing channels kept, with their other settings.'), `The retyped channel is not counted as kept as-is: ${editRun.summary.join(' | ')}`);
   assert.deepEqual(editRun.notes, [], 'Ordinary edits raise no notes.');
 
   // Swapped or misaligned IDs, as when the hidden column is left out of a

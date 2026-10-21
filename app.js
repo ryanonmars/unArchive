@@ -1193,7 +1193,9 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
       return { title: info.sheet, lines };
     }
     const removedNames = new Set(removed.map(node => originalState.get(node).alias));
-    if (outcome.kept) line(`${outcome.kept} existing channels kept, with their other settings.`);
+    // A type change rebuilds the channel, so it is listed apart from these.
+    const keptAsIs = outcome.kept - outcome.retyped.length;
+    if (keptAsIs) line(`${keptAsIs} existing channels kept, with their other settings.`);
     if (outcome.renamed.length) line(`Renamed: ${listNames(outcome.renamed)}.`);
     if (outcome.moved.length) line(`Moved to another zone: ${listNames(outcome.moved)}.`);
     if (outcome.retyped.length) line(`Changed type, rebuilt from the new type's CPS template: ${listNames(outcome.retyped)}.`);
