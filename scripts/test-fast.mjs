@@ -55,6 +55,9 @@ async function rejected(workbook, pattern) {
 }
 const fresh = () => workbookFrom(bytes);
 
+// READ FIRST tells people to clear settings a changed channel type lacks.
+assert.match(rowsFor(fresh(), 'READ FIRST').flat().join(' '), /Clear any setting the new type does not have, such as Privacy Enabled and the key aliases when a Digital channel becomes Analog/);
+
 // An unchanged round trip rebuilds every channel, contact, list, and scan list
 // record exactly, so no field is added, dropped, or emptied.
 {
@@ -330,6 +333,79 @@ for (const pool of [true, false]) {
   const toLinked = await imported(edit(fresh(), 'Zone Channels', { 'DIG TALK': { 'Channel Type': 'Linked Capacity Plus', 'Contact Name': 'CP 1', 'Site List': 'SITES A', 'Scan List': '' } }));
   assert.equal(value(channelIn(toLinked, 'DIG TALK'), 'CP_LCPALATRM'), 'True');
   assert.equal(shape(channelIn(toLinked, 'DIG TALK')), blueprintShape('LINKEDCAPPLUSSYSCONV'));
+}
+
+// Privacy Key Alias (CP_ENHCPRVCYIT) and RAS Key Alias (CP_RASDATAITEM) are
+// key references on Digital, Capacity Plus, and Linked Capacity Plus only.
+// Changing between those types keeps them; a type without them takes only a
+// blank or None, so a reference is never silently dropped.
+{
+  const keyedXml = syntheticCodeplug({ keys: true });
+  const keyedSource = xmlDocument(keyedXml);
+  const keyedBytes = await exportWorkbookFrom(keyedXml);
+  const keyed = () => workbookFrom(keyedBytes);
+  const fields = { 'Privacy Key Alias': 'CP_ENHCPRVCYIT', 'RAS Key Alias': 'CP_RASDATAITEM' };
+  const keyedChannel = alias => allChannels(keyedSource).find(item => item.getAttribute('alias') === alias);
+  for (const name of Object.values(fields)) {
+    for (const type of Object.keys(CPS_BLUEPRINTS.channels)) {
+      assert.equal(blueprintShape(type).includes(`field:${name}`), ['DGTLCONV6PT25', 'CAPPLUSSYSCONV', 'LINKEDCAPPLUSSYSCONV'].includes(type), `${type} ${name} support`);
+    }
+  }
+  const zone = rowsFor(keyed(), 'Zone Channels');
+  const cell = (alias, header) => zone.find(row => row[1] === alias)[zone[0].indexOf(header)];
+  assert.deepEqual([cell('DIG TALK', 'Privacy Key Alias'), cell('DIG TALK', 'RAS Key Alias'), cell('ANA TALK', 'Privacy Key Alias'), cell('ANA TALK', 'RAS Key Alias')], ['PRIV A', 'RAS A', '', '']);
+  assert.deepEqual(rowsFor(keyed(), 'Security').slice(1).map(row => row.slice(0, 2)), [['RAS A', 'PRIV A']]);
+
+  // Unchanged import keeps every key reference and its label exactly.
+  const same = await imported(keyed());
+  for (const original of allChannels(keyedSource)) assert.deepEqual(canonical(channelIn(same, original.getAttribute('alias'))), canonical(original), `${original.getAttribute('alias')} round-trips exactly.`);
+
+  // Changing between types that have the fields keeps both references.
+  const moved = await imported(edit(keyed(), 'Zone Channels', {
+    'DIG TALK': { 'Channel Type': 'Capacity Plus', 'Contact Name': 'CP 1', 'Voice List': 'VOICE A', 'Scan List': '' },
+    'CP TALK': { 'Channel Type': 'Linked Capacity Plus', 'Voice List': '', 'Site List': 'SITES A' },
+    'LCP TALK': { 'Channel Type': 'Digital', 'Contact Name': 'DIG 1', 'Site List': '', 'Auto Roam': '', 'Receive Frequency': '461.9000', 'Transmit Frequency': '461.9000', 'Color Code': '1' }
+  }));
+  for (const [alias, type] of [['DIG TALK', 'CAPPLUSSYSCONV'], ['CP TALK', 'LINKEDCAPPLUSSYSCONV'], ['LCP TALK', 'DGTLCONV6PT25']]) {
+    const channel = channelIn(moved, alias);
+    assert.equal(channelType(channel), type);
+    for (const name of Object.values(fields)) assert.deepEqual([value(channel, name), fieldOf(channel, name).getAttribute('Name')], [value(keyedChannel(alias), name), fieldOf(keyedChannel(alias), name).getAttribute('Name')], `${alias} keeps ${name}`);
+    assert.equal(shape(channel), blueprintShape(type));
+  }
+
+  // Changing to Analog with a key alias left in is refused, naming the field;
+  // cleared or None, the channel becomes a plain Analog record.
+  const toAnalog = { 'Channel Type': 'Analog', 'Contact Name': '', 'Color Code': '', 'Privacy Enabled': '', 'Scan List': '' };
+  for (const alias of ['DIG TALK', 'LCP TALK']) {
+    const extra = alias === 'LCP TALK' ? { 'Site List': '', 'Auto Roam': '', 'Receive Frequency': '462.8000', 'Transmit Frequency': '462.8000' } : {};
+    await rejected(edit(keyed(), 'Zone Channels', { [alias]: { ...toAnalog, ...extra } }), new RegExp(`${alias}: Analog channels have no Privacy Key Alias in CPS\\. Leave Privacy Key Alias blank or None\\.`));
+    await rejected(edit(keyed(), 'Zone Channels', { [alias]: { ...toAnalog, ...extra, 'Privacy Key Alias': '' } }), new RegExp(`${alias}: Analog channels have no RAS Key Alias in CPS`));
+    for (const cleared of ['', 'NONE', 'None']) {
+      const doc = await imported(edit(keyed(), 'Zone Channels', { [alias]: { ...toAnalog, ...extra, 'Privacy Key Alias': cleared, 'RAS Key Alias': cleared } }));
+      assert.equal(channelType(channelIn(doc, alias)), 'ANLGCONV');
+      assert.equal(shape(channelIn(doc, alias)), blueprintShape('ANLGCONV'), `${alias} as Analog has exactly the CPS template fields.`);
+    }
+  }
+
+  // Existing and new Analog channels take no key alias; None adds no field.
+  for (const header of Object.keys(fields)) {
+    const alias = header === 'Privacy Key Alias' ? 'PRIV A' : 'RAS A';
+    await rejected(edit(keyed(), 'Zone Channels', { 'ANA TALK': { [header]: alias } }), new RegExp(`ANA TALK: Analog channels have no ${header} in CPS`));
+    const added = keyed();
+    appendRow(added, 'Zone Channels', { 'Assigned Zone': 'ZONE A', 'Name / Alias': 'NEW ANA KEY', 'Channel Type': 'Analog', 'Receive Frequency': '462.6000', 'Transmit Frequency': '462.6000', [header]: alias });
+    await rejected(added, new RegExp(`NEW ANA KEY: Analog channels have no ${header} in CPS`));
+  }
+  const noneDoc = await imported(edit(keyed(), 'Zone Channels', { 'ANA TALK': { 'Privacy Key Alias': 'NONE', 'RAS Key Alias': 'None' } }));
+  assert.equal(shape(channelIn(noneDoc, 'ANA TALK')), shape(keyedChannel('ANA TALK')));
+
+  // Supported types: clearing a key writes NONE with CPS's label, and an
+  // alias missing from the Security sheet is still refused.
+  const cleared = await imported(edit(keyed(), 'Zone Channels', { 'CP TALK': { 'Privacy Key Alias': '', 'RAS Key Alias': '' } }));
+  for (const name of Object.values(fields)) assert.deepEqual([value(channelIn(cleared, 'CP TALK'), name), fieldOf(channelIn(cleared, 'CP TALK'), name).getAttribute('Name')], ['NONE', 'None']);
+  await rejected(edit(keyed(), 'Zone Channels', { 'DIG TALK': { 'Privacy Key Alias': 'PRIV Z' } }), /DIG TALK: Privacy Key Alias "PRIV Z" is not listed on the Security sheet/);
+  const fromAnalog = await imported(edit(keyed(), 'Zone Channels', { 'ANA TALK': { 'Channel Type': 'Digital', 'Contact Name': 'DIG 1', 'Color Code': '1', 'Scan List': '', 'Privacy Key Alias': 'PRIV A', 'RAS Key Alias': 'RAS A' } }));
+  assert.deepEqual(Object.values(fields).map(name => value(channelIn(fromAnalog, 'ANA TALK'), name)), ['PRIV A', 'RAS A']);
+  assert.equal(shape(channelIn(fromAnalog, 'ANA TALK')), blueprintShape('DGTLCONV6PT25'));
 }
 
 console.log('Fast tests passed.');

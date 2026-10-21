@@ -34,7 +34,8 @@ function contact(doc, xml, name, id) {
 
 const CHANNEL_FIELDS = {
   rx: 'CP_RXFREQ', tx: 'CP_TXFREQ', colorCode: 'CP_COLORCODE', contact: 'CP_UKPPERS', voiceList: 'CP_TRUNKCHANLISTIT',
-  siteList: 'CP_LCPSTLSTIT', scanList: 'CP_SCNROAMLISTIT', receiveOnly: 'CP_RXONLYEN'
+  siteList: 'CP_LCPSTLSTIT', scanList: 'CP_SCNROAMLISTIT', receiveOnly: 'CP_RXONLYEN',
+  privacy: 'CP_VOICEPRIVACYEN', privacyKey: 'CP_ENHCPRVCYIT', rasKey: 'CP_RASDATAITEM'
 };
 function channel(doc, type, name, values = {}) {
   const record = node(doc, CPS_BLUEPRINTS.channels[type]);
@@ -61,8 +62,11 @@ function categoryOf(doc, name, records) {
 
 // Each channel type and its Receive Only and Scan List values, chosen so a
 // test can tell a kept value from a default.
-export function syntheticCodeplug({ pool = true, roamListChannel = false } = {}) {
+// With keys, the TALK channels of each type that has privacy carry invented
+// privacy and RAS key aliases.
+export function syntheticCodeplug({ pool = true, roamListChannel = false, keys = false } = {}) {
   const doc = new DOMParser().parseFromString('<config></config>', 'application/xml');
+  const keyed = keys ? { privacy: 'True', privacyKey: 'PRIV A', rasKey: 'RAS A' } : {};
   const contacts = [
     contact(doc, CPS_BLUEPRINTS.contacts.Digital, 'DIG 1', '9001'),
     contact(doc, CPS_BLUEPRINTS.contacts.Digital, 'DIG 2', '9002'),
@@ -71,13 +75,13 @@ export function syntheticCodeplug({ pool = true, roamListChannel = false } = {})
   ];
   const zoneChannels = [
     channel(doc, 'DGTLCONV6PT25', 'DIG RXONLY', { rx: '461.0125', tx: '461.0125', colorCode: '1', contact: 'DIG 1', scanList: 'ScanItems/SCAN A', receiveOnly: 'True' }),
-    channel(doc, 'DGTLCONV6PT25', 'DIG TALK', { rx: '461.0250', tx: '466.0250', colorCode: '2', contact: 'DIG 2', scanList: roamListChannel ? 'RoamList/ROAM A' : 'NONE', receiveOnly: 'False' }),
+    channel(doc, 'DGTLCONV6PT25', 'DIG TALK', { rx: '461.0250', tx: '466.0250', colorCode: '2', contact: 'DIG 2', scanList: roamListChannel ? 'RoamList/ROAM A' : 'NONE', receiveOnly: 'False', ...keyed }),
     channel(doc, 'ANLGCONV', 'ANA RXONLY', { rx: '462.5500', tx: '462.5500', scanList: 'ScanItems/SCAN B', receiveOnly: 'True' }),
     channel(doc, 'ANLGCONV', 'ANA TALK', { rx: '462.5750', tx: '467.5750', receiveOnly: 'False' }),
     channel(doc, 'CAPPLUSSYSCONV', 'CP RXONLY', { contact: 'CP 1', voiceList: 'VOICE A', receiveOnly: 'True' }),
-    channel(doc, 'CAPPLUSSYSCONV', 'CP TALK', { contact: 'CP 1', voiceList: 'VOICE A', receiveOnly: 'False' }),
+    channel(doc, 'CAPPLUSSYSCONV', 'CP TALK', { contact: 'CP 1', voiceList: 'VOICE A', receiveOnly: 'False', ...keyed }),
     channel(doc, 'LINKEDCAPPLUSSYSCONV', 'LCP RXONLY', { contact: 'CP 1', siteList: 'SITES A', receiveOnly: 'True' }),
-    channel(doc, 'LINKEDCAPPLUSSYSCONV', 'LCP TALK', { contact: 'CP 1', siteList: 'SITES A', receiveOnly: 'False' })
+    channel(doc, 'LINKEDCAPPLUSSYSCONV', 'LCP TALK', { contact: 'CP 1', siteList: 'SITES A', receiveOnly: 'False', ...keyed })
   ];
   const poolChannels = pool ? [
     channel(doc, 'CAPPLUSVOICECONV', 'VOICE 1', { rx: '463.1000', tx: '468.1000', colorCode: '3' }),

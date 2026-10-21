@@ -82,6 +82,9 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
   // Enabled on Digital, Capacity Plus, and Linked Capacity Plus, and Auto Roam
   // on Linked Capacity Plus.
   const CHANNEL_BOOLEAN_FIELDS = { CP_RXONLYEN: 'Receive Only', CP_VOICEPRIVACYEN: 'Privacy Enabled', CP_LCPALATRM: 'Auto Roam' };
+  // Key alias references exist on Digital, Capacity Plus, and Linked Capacity
+  // Plus channels only. NONE means no key.
+  const CHANNEL_KEY_ALIAS_FIELDS = { CP_ENHCPRVCYIT: 'Privacy Key Alias', CP_RASDATAITEM: 'RAS Key Alias' };
   // A channel's Scan List is CPS's Scan/Roam List setting. CPS stores a scan
   // list as ScanItems/<list name> and no list as NONE; only Analog and Digital
   // channels have the setting. Any other reference, such as a roam list, is
@@ -767,7 +770,7 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
         ['Topic', 'What you need to know'],
         ['Start with the correct radio model', 'Copy from a codeplug made for the same radio model and feature set as the target radios. unArchive does not convert one radio model into another. The source may otherwise be empty or contain records you plan to replace.'],
         ['Editing an existing record', "Changing names, frequencies, assignments, and other visible values keeps the record's original hidden CPS structure."],
-        ['Adding a record or changing its type', 'New records use complete CPS-created templates built into unArchive. If you change a Digital contact or channel to Capacity Plus, Analog, or another type, unArchive replaces the old record with a complete record of the selected type. The source does not need to already contain that type.'],
+        ['Adding a record or changing its type', 'New records use complete CPS-created templates built into unArchive. If you change a Digital contact or channel to Capacity Plus, Analog, or another type, unArchive replaces the old record with a complete record of the selected type. The source does not need to already contain that type. Clear any setting the new type does not have, such as Privacy Enabled and the key aliases when a Digital channel becomes Analog; import names each one left filled in.'],
         ['Add records on blank rows', 'Dragging values down a visible column is safe. Do not copy an entire existing row to create a new record; that also copies a hidden identity and import will stop with an error.'],
         ['Analog channel defaults', 'New channels changed to Analog start as carrier-squelch, 12.5 kHz, high-power channels with no PL/DPL tone. Configure any required PL/DPL, bandwidth, power, or signaling changes in CPS after pasting.'],
         ['RAS and privacy', 'The target codeplug must already contain every referenced RAS and privacy key. CPS clipboard XML carries the key names but not the secret key values.'],
@@ -1110,6 +1113,7 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
     const requested = (key) => key in row ? text(row[key]).trim() : '';
     const requestedContact = requested('field:CP_UKPPERS'), requestedScanList = requested(SCAN_LIST_KEY);
     const requestedBooleans = Object.fromEntries(Object.keys(CHANNEL_BOOLEAN_FIELDS).map(name => [name, requested(fieldKey(name))]));
+    const requestedKeyAliases = Object.fromEntries(Object.keys(CHANNEL_KEY_ALIAS_FIELDS).map(name => [name, requested(fieldKey(name))]));
     const originalScanList = node ? directFieldValue(node, SCAN_LIST_FIELD) : '';
     const originalValues = new Map(['CP_RXFREQ', 'CP_TXFREQ', 'CP_COLORCODE', 'CP_UKPPERS', 'CP_TRUNKCHANLISTIT', 'CP_LCPSTLSTIT'].map(name => [name, node ? directFieldValue(node, name).trim() : '']));
     const typeChanged = Boolean(node && originalType !== type);
@@ -1173,6 +1177,14 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
       const choice = TRUE_FALSE_OPTIONS.find(option => option.toLowerCase() === requestedBooleans[name].toLowerCase());
       if (requestedBooleans[name] && !choice) throw new Error(`${alias}: ${label} must be True or False, not "${requestedBooleans[name]}".`);
       row[key] = choice || directFieldValue(node, name);
+    }
+    // A key alias on a type without the field, such as a Digital channel
+    // changed to Analog, would otherwise be dropped or break the record.
+    for (const [name, label] of Object.entries(CHANNEL_KEY_ALIAS_FIELDS)) {
+      const key = fieldKey(name), requestedAlias = requestedKeyAliases[name];
+      if (!(key in row) || hasField(name)) continue;
+      if (requestedAlias && requestedAlias.toUpperCase() !== 'NONE') throw new Error(`${alias}: ${displayValue('field:CP_PERSTYPE', type)} channels have no ${label} in CPS. Leave ${label} blank or None.`);
+      row[key] = '';
     }
     if (SCAN_LIST_KEY in row) {
       const isNone = !requestedScanList || requestedScanList.toUpperCase() === 'NONE';
