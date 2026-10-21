@@ -77,6 +77,11 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
   const CHANNEL_POOL_ZONE_OPTIONS = ['Channel Pool'];
   const CHANNEL_POOL_TYPE_OPTIONS = ['Capacity Plus Voice', 'Digital'];
   const TRUE_FALSE_OPTIONS = ['True', 'False'];
+  // True/False channel settings shown in the workbook. Each exists only on
+  // some channel types: Receive Only on all but Capacity Plus Voice, Privacy
+  // Enabled on Digital, Capacity Plus, and Linked Capacity Plus, and Auto Roam
+  // on Linked Capacity Plus.
+  const CHANNEL_BOOLEAN_FIELDS = { CP_RXONLYEN: 'Receive Only', CP_VOICEPRIVACYEN: 'Privacy Enabled', CP_LCPALATRM: 'Auto Roam' };
   // A channel's Scan List is CPS's Scan/Roam List setting. CPS stores a scan
   // list as ScanItems/<list name> and no list as NONE; only Analog and Digital
   // channels have the setting. Any other reference, such as a roam list, is
@@ -1103,7 +1108,8 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
     // Read before fields the channel type lacks are cleared below, so a value
     // entered for an unsupported field is reported instead of dropped.
     const requested = (key) => key in row ? text(row[key]).trim() : '';
-    const requestedContact = requested('field:CP_UKPPERS'), requestedScanList = requested(SCAN_LIST_KEY), requestedReceiveOnly = requested('field:CP_RXONLYEN');
+    const requestedContact = requested('field:CP_UKPPERS'), requestedScanList = requested(SCAN_LIST_KEY);
+    const requestedBooleans = Object.fromEntries(Object.keys(CHANNEL_BOOLEAN_FIELDS).map(name => [name, requested(fieldKey(name))]));
     const originalScanList = node ? directFieldValue(node, SCAN_LIST_FIELD) : '';
     const originalValues = new Map(['CP_RXFREQ', 'CP_TXFREQ', 'CP_COLORCODE', 'CP_UKPPERS', 'CP_TRUNKCHANLISTIT', 'CP_LCPSTLSTIT'].map(name => [name, node ? directFieldValue(node, name).trim() : '']));
     const typeChanged = Boolean(node && originalType !== type);
@@ -1150,18 +1156,23 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
       if (hasContact && !contact) row['field:CP_UKPPERS'] = 'NONE';
       if (!hasContact) row['field:CP_UKPPERS'] = '';
     }
-    // Capacity Plus Voice has no Receive Only in CPS. Any value, even False,
-    // would add a field its record does not have.
-    if ('field:CP_RXONLYEN' in row && !hasField('CP_RXONLYEN')) {
-      if (requestedReceiveOnly) throw new Error(`${alias}: ${displayValue('field:CP_PERSTYPE', type)} channels have no Receive Only setting in CPS. Leave Receive Only blank.`);
-      row['field:CP_RXONLYEN'] = '';
-    } else if ('field:CP_RXONLYEN' in row) {
-      // CPS stores Receive Only as True or False and never blank. A blank cell
-      // keeps the record's value: the stored one for an existing channel, the
-      // CPS default for a new channel or a changed type.
-      const choice = TRUE_FALSE_OPTIONS.find(option => option.toLowerCase() === requestedReceiveOnly.toLowerCase());
-      if (requestedReceiveOnly && !choice) throw new Error(`${alias}: Receive Only must be True or False, not "${requestedReceiveOnly}".`);
-      row['field:CP_RXONLYEN'] = choice || directFieldValue(node, 'CP_RXONLYEN');
+    for (const [name, label] of Object.entries(CHANNEL_BOOLEAN_FIELDS)) {
+      const key = fieldKey(name);
+      if (!(key in row)) continue;
+      // A type without the field, such as Capacity Plus Voice for Receive Only,
+      // takes no value at all, even False, since any value would add a field
+      // its CPS record does not have.
+      if (!hasField(name)) {
+        if (requestedBooleans[name]) throw new Error(`${alias}: ${displayValue('field:CP_PERSTYPE', type)} channels have no ${label} setting in CPS. Leave ${label} blank.`);
+        row[key] = '';
+        continue;
+      }
+      // CPS stores these as True or False and never blank. A blank cell keeps
+      // the record's value: the stored one for an existing channel, the CPS
+      // default for a new channel or a changed type.
+      const choice = TRUE_FALSE_OPTIONS.find(option => option.toLowerCase() === requestedBooleans[name].toLowerCase());
+      if (requestedBooleans[name] && !choice) throw new Error(`${alias}: ${label} must be True or False, not "${requestedBooleans[name]}".`);
+      row[key] = choice || directFieldValue(node, name);
     }
     if (SCAN_LIST_KEY in row) {
       const isNone = !requestedScanList || requestedScanList.toUpperCase() === 'NONE';

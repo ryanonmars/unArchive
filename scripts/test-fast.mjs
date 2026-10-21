@@ -208,7 +208,7 @@ for (const pool of [true, false]) {
     assert.equal(shape(channelIn(blankDoc, alias)), blueprintShape(type));
   }
   const changedType = await imported(edit(fresh(), 'Zone Channels', {
-    'DIG RXONLY': { 'Channel Type': 'Analog', 'Contact Name': '', 'Scan List': '', 'Receive Only': '' },
+    'DIG RXONLY': { 'Channel Type': 'Analog', 'Contact Name': '', 'Scan List': '', 'Receive Only': '', 'Privacy Enabled': '' },
     'ANA RXONLY': { 'Channel Type': 'Digital', 'Contact Name': 'DIG 1', 'Color Code': '1', 'Scan List': '', 'Receive Only': 'True' }
   }));
   assert.equal(value(channelIn(changedType, 'DIG RXONLY'), 'CP_RXONLYEN'), 'False', 'A changed type takes the new type\'s default.');
@@ -238,6 +238,98 @@ for (const pool of [true, false]) {
   assert.equal(fieldOf(channelIn(converted, 'POOL ALL CALL'), 'CP_RXONLYEN'), undefined);
   assert.equal(shape(channelIn(converted, 'POOL ALL CALL')), blueprintShape('CAPPLUSVOICECONV'), 'The converted channel has exactly the CPS template fields.');
   for (const alias of ['VOICE 1', 'VOICE 2']) assert.equal(fieldOf(channelIn(converted, alias), 'CP_RXONLYEN'), undefined);
+}
+
+// Privacy Enabled (CP_VOICEPRIVACYEN) and Auto Roam (CP_LCPALATRM) are True/False
+// fields like Receive Only, on fewer channel types: Privacy Enabled on Digital,
+// Capacity Plus, and Linked Capacity Plus (default False), and Auto Roam on
+// Linked Capacity Plus only (default True).
+{
+  const settings = [
+    { header: 'Privacy Enabled', field: 'CP_VOICEPRIVACYEN', types: ['DGTLCONV6PT25', 'CAPPLUSSYSCONV', 'LINKEDCAPPLUSSYSCONV'], fallback: 'False' },
+    { header: 'Auto Roam', field: 'CP_LCPALATRM', types: ['LINKEDCAPPLUSSYSCONV'], fallback: 'True' }
+  ];
+  const typeLabels = { DGTLCONV6PT25: 'Digital', ANLGCONV: 'Analog', CAPPLUSSYSCONV: 'Capacity Plus', LINKEDCAPPLUSSYSCONV: 'Linked Capacity Plus', CAPPLUSVOICECONV: 'Capacity Plus Voice' };
+  const prefixes = { DGTLCONV6PT25: 'DIG', ANLGCONV: 'ANA', CAPPLUSSYSCONV: 'CP', LINKEDCAPPLUSSYSCONV: 'LCP' };
+  const newRow = {
+    DGTLCONV6PT25: { 'Contact Name': 'DIG 1', 'Channel Type': 'Digital', 'Receive Frequency': '461.6000', 'Transmit Frequency': '461.6000', 'Color Code': '1' },
+    ANLGCONV: { 'Channel Type': 'Analog', 'Receive Frequency': '462.6000', 'Transmit Frequency': '462.6000' },
+    CAPPLUSSYSCONV: { 'Contact Name': 'CP 1', 'Channel Type': 'Capacity Plus', 'Voice List': 'VOICE A' },
+    LINKEDCAPPLUSSYSCONV: { 'Contact Name': 'CP 1', 'Channel Type': 'Linked Capacity Plus', 'Site List': 'SITES A' }
+  };
+  const zone = rowsFor(fresh(), 'Zone Channels');
+  const cell = (alias, header) => zone.find(row => row[1] === alias)[zone[0].indexOf(header)];
+  assert.ok(!rowsFor(fresh(), 'Channel Pool')[0].includes('Privacy Enabled') && !rowsFor(fresh(), 'Channel Pool')[0].includes('Auto Roam'), 'Only Zone Channels shows these columns.');
+
+  for (const { header, field, types, fallback } of settings) {
+    for (const type of Object.keys(CPS_BLUEPRINTS.channels)) {
+      assert.equal(blueprintShape(type).includes(`field:${field}`), types.includes(type), `${type} ${header} support`);
+      if (types.includes(type)) assert.equal(value(xmlDocument(`<r>${CPS_BLUEPRINTS.channels[type]}</r>`).documentElement.firstElementChild, field), fallback, `${type} ${header} default`);
+    }
+    const headers = rowsFor(fresh(), 'Zone Channels')[0];
+    assert.match(await sheetXml(bytes, 'Zone Channels'), new RegExp(`sqref="${column(headers, header)}2:${column(headers, header)}5000"><formula1>&quot;True,False&quot;</formula1>`), `${header} drop-down`);
+    const supported = types.filter(type => type in prefixes).map(type => prefixes[type]);
+    const unsupported = Object.keys(prefixes).filter(type => !types.includes(type));
+
+    // Export shows the stored value on supported types and a blank elsewhere.
+    for (const prefix of supported) assert.equal(cell(`${prefix} TALK`, header), value(sourceChannel(`${prefix} TALK`), field));
+    for (const type of unsupported) assert.equal(cell(`${prefixes[type]} TALK`, header), '', `${typeLabels[type]} exports a blank ${header}.`);
+
+    // Any letter case is written in CPS's form; a blank keeps the stored value.
+    const opposite = stored => stored === 'True' ? 'False' : 'True';
+    const flipped = await imported(edit(fresh(), 'Zone Channels', Object.fromEntries(supported.flatMap(prefix => [
+      [`${prefix} TALK`, { [header]: opposite(value(sourceChannel(`${prefix} TALK`), field)).toLowerCase() }],
+      [`${prefix} RXONLY`, { [header]: '' }]
+    ]))));
+    for (const prefix of supported) {
+      assert.equal(value(channelIn(flipped, `${prefix} TALK`), field), opposite(value(sourceChannel(`${prefix} TALK`), field)), `${prefix} TALK ${header} in CPS form`);
+      assert.equal(value(channelIn(flipped, `${prefix} RXONLY`), field), value(sourceChannel(`${prefix} RXONLY`), field), `${prefix} RXONLY keeps its ${header} when cleared`);
+      for (const alias of [`${prefix} TALK`, `${prefix} RXONLY`]) assert.equal(shape(channelIn(flipped, alias)), shape(sourceChannel(alias)), `${alias} keeps its CPS fields.`);
+    }
+
+    // New channels: blank takes the CPS default, an entered value is kept.
+    const added = fresh();
+    for (const type of types) {
+      appendRow(added, 'Zone Channels', { 'Assigned Zone': 'ZONE A', 'Name / Alias': `NEW BLANK ${prefixes[type]}`, ...newRow[type] });
+      appendRow(added, 'Zone Channels', { 'Assigned Zone': 'ZONE A', 'Name / Alias': `NEW SET ${prefixes[type]}`, ...newRow[type], [header]: opposite(fallback) });
+    }
+    const addedDoc = await imported(added);
+    for (const type of types) {
+      assert.equal(value(channelIn(addedDoc, `NEW BLANK ${prefixes[type]}`), field), fallback);
+      assert.equal(value(channelIn(addedDoc, `NEW SET ${prefixes[type]}`), field), opposite(fallback));
+      for (const alias of [`NEW BLANK ${prefixes[type]}`, `NEW SET ${prefixes[type]}`]) assert.equal(shape(channelIn(addedDoc, alias)), blueprintShape(type));
+    }
+
+    // Values other than True or False are refused.
+    await rejected(edit(fresh(), 'Zone Channels', { [`${supported[0]} TALK`]: { [header]: 'Yes' } }), new RegExp(`${supported[0]} TALK: ${header} must be True or False, not "Yes"`));
+
+    // Types without the field take no value, even False: existing, new, and
+    // converted channels alike, and a blank adds no field.
+    const missing = new RegExp(`channels have no ${header} setting in CPS\\. Leave ${header} blank\\.`);
+    for (const type of unsupported) {
+      for (const entry of ['True', 'False', 'false']) {
+        await rejected(edit(fresh(), 'Zone Channels', { [`${prefixes[type]} TALK`]: { [header]: entry } }), new RegExp(`${prefixes[type]} TALK: ${typeLabels[type]} ${missing.source}`));
+      }
+      const addedBad = fresh();
+      appendRow(addedBad, 'Zone Channels', { 'Assigned Zone': 'ZONE A', 'Name / Alias': 'NEW BAD', ...newRow[type], [header]: 'False' });
+      await rejected(addedBad, new RegExp(`NEW BAD: ${typeLabels[type]} ${missing.source}`));
+      const blankDoc = await imported(edit(fresh(), 'Zone Channels', { [`${prefixes[type]} TALK`]: { [header]: '' } }));
+      assert.equal(fieldOf(channelIn(blankDoc, `${prefixes[type]} TALK`), field), undefined);
+    }
+  }
+
+  // Changing a Linked Capacity Plus channel to Digital: its exported Auto Roam
+  // must be cleared, while Privacy Enabled carries over because Digital has it.
+  const toDigital = { 'Channel Type': 'Digital', 'Contact Name': 'DIG 1', 'Site List': '', 'Receive Frequency': '461.8000', 'Transmit Frequency': '461.8000', 'Color Code': '1' };
+  await rejected(edit(fresh(), 'Zone Channels', { 'LCP TALK': toDigital }), /LCP TALK: Digital channels have no Auto Roam setting in CPS/);
+  const converted = await imported(edit(fresh(), 'Zone Channels', { 'LCP TALK': { ...toDigital, 'Auto Roam': '', 'Privacy Enabled': 'True' } }));
+  assert.equal(fieldOf(channelIn(converted, 'LCP TALK'), 'CP_LCPALATRM'), undefined);
+  assert.equal(value(channelIn(converted, 'LCP TALK'), 'CP_VOICEPRIVACYEN'), 'True');
+  assert.equal(shape(channelIn(converted, 'LCP TALK')), blueprintShape('DGTLCONV6PT25'));
+  // And back: a Digital channel changed to Linked Capacity Plus takes its default Auto Roam.
+  const toLinked = await imported(edit(fresh(), 'Zone Channels', { 'DIG TALK': { 'Channel Type': 'Linked Capacity Plus', 'Contact Name': 'CP 1', 'Site List': 'SITES A', 'Scan List': '' } }));
+  assert.equal(value(channelIn(toLinked, 'DIG TALK'), 'CP_LCPALATRM'), 'True');
+  assert.equal(shape(channelIn(toLinked, 'DIG TALK')), blueprintShape('LINKEDCAPPLUSSYSCONV'));
 }
 
 console.log('Fast tests passed.');

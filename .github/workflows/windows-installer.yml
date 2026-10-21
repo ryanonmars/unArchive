@@ -2,8 +2,9 @@ name: Windows installer
 
 # Push a tag such as v0.1.0 to build the installer and publish a release.
 # Run the workflow manually to build an installer artifact without releasing.
-# The full import safety tests need private CPS fixtures, so run
-# `npm run test:full` locally before tagging a release.
+# The job runs the tracked fast tests (npm test) before building. The full
+# import safety tests need private CPS fixtures, so run `npm run test:full`
+# locally before tagging a release.
 on:
   push:
     tags: ['v*.*.*']
@@ -35,6 +36,11 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # The tracked fast suite needs no private fixtures. A failure stops the
+      # job here, before anything is built, signed, or released.
+      - name: Run fast tests
+        run: npm test
 
       - name: Set version from tag
         if: startsWith(github.ref, 'refs/tags/v')
