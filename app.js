@@ -70,6 +70,11 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
   const CONTACT_CALL_TYPE_OPTIONS = ['MDC', 'Quik Call II', 'Digital', 'Capacity Plus'];
   const ALL_CALL_IDS = { Digital: '16777215', 'Capacity Plus': '255' };
   const ZONE_CHANNEL_TYPE_OPTIONS = ['Analog', 'Digital', 'Capacity Plus', 'Linked Capacity Plus'];
+  // Channel Pool rows always import into the pool, whatever Assigned Zone
+  // says. Capacity Plus Voice is the repeater channel that voice lists name;
+  // Digital is the only other pool type offered.
+  const CHANNEL_POOL_ZONE_OPTIONS = ['Channel Pool'];
+  const CHANNEL_POOL_TYPE_OPTIONS = ['Capacity Plus Voice', 'Digital'];
   const TRUE_FALSE_OPTIONS = ['True', 'False'];
   const SECURITY_PRIVACY_TYPE_OPTIONS = ['None', 'Basic', 'Enhanced'];
   // CPS silently cuts zone, channel, and contact names to 16 characters on
@@ -795,7 +800,7 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
       };
       for (const { sheet, presentation } of presentations) {
         const choices = sheet.label === 'Zone Channels' ? namedChoices : sheet.label === 'Site Lists' ? { '__site_voice_list': { formula: 'unArchiveVoiceListNames', strict: false } } : sheet.label === 'Voice Lists' ? { '__voice_list_member': { formula: 'unArchiveChannelPoolNames', strict: true } } : {};
-        const fixedChoices = sheet.label === 'Contacts' ? { '__contact_type': CONTACT_CALL_TYPE_OPTIONS } : sheet.label === 'Zone Channels' ? { 'field:CP_PERSTYPE': ZONE_CHANNEL_TYPE_OPTIONS, 'field:CP_VOICEPRIVACYEN': TRUE_FALSE_OPTIONS, 'field:CP_LCPALATRM': TRUE_FALSE_OPTIONS, 'field:CP_RXONLYEN': TRUE_FALSE_OPTIONS } : sheet.label === 'Channel Pool' ? { 'field:CP_RXONLYEN': TRUE_FALSE_OPTIONS } : sheet.label === 'Security' ? { '__privacy_type': SECURITY_PRIVACY_TYPE_OPTIONS } : {};
+        const fixedChoices = sheet.label === 'Contacts' ? { '__contact_type': CONTACT_CALL_TYPE_OPTIONS } : sheet.label === 'Zone Channels' ? { 'field:CP_PERSTYPE': ZONE_CHANNEL_TYPE_OPTIONS, 'field:CP_VOICEPRIVACYEN': TRUE_FALSE_OPTIONS, 'field:CP_LCPALATRM': TRUE_FALSE_OPTIONS, 'field:CP_RXONLYEN': TRUE_FALSE_OPTIONS } : sheet.label === 'Channel Pool' ? { '__parent_label': CHANNEL_POOL_ZONE_OPTIONS, 'field:CP_PERSTYPE': CHANNEL_POOL_TYPE_OPTIONS, 'field:CP_RXONLYEN': TRUE_FALSE_OPTIONS } : sheet.label === 'Security' ? { '__privacy_type': SECURITY_PRIVACY_TYPE_OPTIONS } : {};
         XLSX.utils.book_append_sheet(wb, worksheetFromPresentation(presentation, choices, fixedChoices), sheet.sheetName);
         meta.push([sheet.sheetName, sheet.id, sheet.category, sheet.collectionName, sheet.layout, JSON.stringify(presentation.columnMap)]);
       }
