@@ -34,7 +34,7 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
     CP_TXINHXPLEN: 'Admit Criteria', CP_MYCALLADCRTR: 'In Call Criteria',
     CP_TRUNKCHANLISTIT: 'Voice List', CP_LCPSTLSTIT: 'Site List', CP_LCPALATRM: 'Auto Roam',
     CP_ENHCPRVCYIT: 'Privacy Key Alias', CP_RASDATAITEM: 'RAS Key Alias', RC_RAS_PROPRIETARY_KEY_ID: 'RAS Proprietary Key ID',
-    CP_TGLISTIT: 'RX Group List', CP_SCANLISTIT: 'Scan List', CP_EMSYSIT: 'Emergency System', CP_UKPPERS: 'Contact Name',
+    CP_TGLISTIT: 'RX Group List', CP_SCNROAMLISTIT: 'Scan List', CP_EMSYSIT: 'Emergency System', CP_UKPPERS: 'Contact Name',
     DU_CALLALIAS: 'Contact Name', DU_CALLLSTID: 'Call ID', DU_CALLTYPE: 'Call Type',
     CAPPLUSUCL_CALLALIAS: 'Contact Name', CAPPLUSUCL_CALLLSTID: 'Call ID',
     CAPPLUSUCL_CALLTYPE: 'Call Type', TP_TRUNKPERALIAS: 'Voice List Name',
@@ -42,8 +42,8 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
   };
   const FOCUSED_COLUMNS = {
     Zones: ['@alias'],
-    'Zone Channels': ['@alias', 'field:CP_UKPPERS', 'field:CP_PERSTYPE', 'field:CP_VOICEPRIVACYEN', 'field:CP_ENHCPRVCYIT', 'field:CP_RASDATAITEM', 'field:CP_TRUNKCHANLISTIT', 'field:CP_LCPSTLSTIT', 'field:CP_LCPALATRM', 'field:CP_RXFREQ', 'field:CP_TXFREQ', 'field:CP_COLORCODE', 'field:CP_TXINHXPLEN', 'field:CP_MYCALLADCRTR', 'field:CP_RXONLYEN', 'field:CP_SCANLISTIT'],
-    'Channel Pool': ['@alias', 'field:CP_UKPPERS', 'field:CP_PERSTYPE', 'field:CP_RXFREQ', 'field:CP_TXFREQ', 'field:CP_COLORCODE', 'field:CP_RXONLYEN', 'field:CP_SCANLISTIT']
+    'Zone Channels': ['@alias', 'field:CP_UKPPERS', 'field:CP_PERSTYPE', 'field:CP_VOICEPRIVACYEN', 'field:CP_ENHCPRVCYIT', 'field:CP_RASDATAITEM', 'field:CP_TRUNKCHANLISTIT', 'field:CP_LCPSTLSTIT', 'field:CP_LCPALATRM', 'field:CP_RXFREQ', 'field:CP_TXFREQ', 'field:CP_COLORCODE', 'field:CP_TXINHXPLEN', 'field:CP_MYCALLADCRTR', 'field:CP_RXONLYEN', 'field:CP_SCNROAMLISTIT'],
+    'Channel Pool': ['@alias', 'field:CP_UKPPERS', 'field:CP_PERSTYPE', 'field:CP_RXFREQ', 'field:CP_TXFREQ', 'field:CP_COLORCODE', 'field:CP_RXONLYEN', 'field:CP_SCNROAMLISTIT']
   };
   const CHANNEL_TYPE_LABELS = {
     CAPPLUSSYSCONV: 'Capacity Plus',
@@ -77,6 +77,20 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
   const CHANNEL_POOL_ZONE_OPTIONS = ['Channel Pool'];
   const CHANNEL_POOL_TYPE_OPTIONS = ['Capacity Plus Voice', 'Digital'];
   const TRUE_FALSE_OPTIONS = ['True', 'False'];
+  // A channel's Scan List is CPS's Scan/Roam List setting. CPS stores a scan
+  // list as ScanItems/<list name> and no list as NONE; only Analog and Digital
+  // channels have the setting. Any other reference, such as a roam list, is
+  // shown as stored and kept only while it is left unchanged.
+  const SCAN_LIST_FIELD = 'CP_SCNROAMLISTIT', SCAN_LIST_KEY = `field:${SCAN_LIST_FIELD}`, SCAN_LIST_PREFIX = 'ScanItems/';
+  function scanListLabel(value) {
+    const stored = text(value);
+    if (stored.trim().toUpperCase() === 'NONE') return 'None';
+    return stored.startsWith(SCAN_LIST_PREFIX) ? stored.slice(SCAN_LIST_PREFIX.length) : stored;
+  }
+  function scanListNames(doc) {
+    const category = directChildren(doc.documentElement, 'category').find(node => node.getAttribute('name') === 'ScanItems');
+    return recordsForCategory(category).map(node => text(node.getAttribute('alias'))).filter(Boolean);
+  }
   const SECURITY_PRIVACY_TYPE_OPTIONS = ['None', 'Basic', 'Enhanced'];
   // CPS silently cuts zone, channel, and contact names to 16 characters on
   // paste, and a cut channel name no longer matches its slot, so CPS moves
@@ -109,6 +123,7 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
   function criteriaLabel(technical, value) { return criteriaOption(technical, value)?.label || ''; }
   function displayValue(technical, value) {
     if (technical === 'field:CP_PERSTYPE') return CHANNEL_TYPE_LABELS[text(value)] || value;
+    if (technical === SCAN_LIST_KEY) return scanListLabel(value);
     return CRITERIA_OPTIONS[technical] ? (criteriaLabel(technical, value) || value) : value;
   }
   function cpsValue(technical, value) {
@@ -785,9 +800,11 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
         'field:CP_ENHCPRVCYIT': { formula: 'unArchivePrivacyKeyAliases', strict: true },
         'field:CP_RASDATAITEM': { formula: 'unArchiveRASKeyAliases', strict: true },
         'field:CP_TRUNKCHANLISTIT': { formula: 'unArchiveVoiceListNames', strict: false },
-        'field:CP_LCPSTLSTIT': { formula: 'unArchiveSiteListNames', strict: false }
+        'field:CP_LCPSTLSTIT': { formula: 'unArchiveSiteListNames', strict: false },
+        [SCAN_LIST_KEY]: { formula: 'unArchiveScanListNames', strict: true }
       };
       const choiceRange = (column) => `'_CPS_CHOICES'!$${column}$2:$${column}$501`;
+      const scanListChoices = ['None', ...scanListNames(model.doc)].slice(0, 500);
       wb.Workbook = {
         Names: [
           ...(contacts ? [{ Name: 'unArchiveContactNames', Ref: range(contacts) }] : []),
@@ -795,19 +812,20 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
           ...(voiceLists ? [{ Name: 'unArchiveVoiceListNames', Ref: choiceRange('A') }] : []),
           ...(channelPool ? [{ Name: 'unArchiveChannelPoolNames', Ref: range(channelPool, 'B') }] : []),
           ...(siteLists ? [{ Name: 'unArchiveSiteListNames', Ref: choiceRange('B') }] : []),
-          ...(security ? [{ Name: 'unArchiveRASKeyAliases', Ref: choiceRange('C') }, { Name: 'unArchivePrivacyKeyAliases', Ref: choiceRange('D') }] : [])
+          ...(security ? [{ Name: 'unArchiveRASKeyAliases', Ref: choiceRange('C') }, { Name: 'unArchivePrivacyKeyAliases', Ref: choiceRange('D') }] : []),
+          { Name: 'unArchiveScanListNames', Ref: `'_CPS_CHOICES'!$E$2:$E$${scanListChoices.length + 1}` }
         ],
         CalcPr: { calcMode: 'auto', fullCalcOnLoad: '1', forceFullCalc: '1' }
       };
       for (const { sheet, presentation } of presentations) {
-        const choices = sheet.label === 'Zone Channels' ? namedChoices : sheet.label === 'Channel Pool' ? { 'field:CP_UKPPERS': namedChoices['field:CP_UKPPERS'] } : sheet.label === 'Site Lists' ? { '__site_voice_list': { formula: 'unArchiveVoiceListNames', strict: false } } : sheet.label === 'Voice Lists' ? { '__voice_list_member': { formula: 'unArchiveChannelPoolNames', strict: true } } : {};
+        const choices = sheet.label === 'Zone Channels' ? namedChoices : sheet.label === 'Channel Pool' ? { 'field:CP_UKPPERS': namedChoices['field:CP_UKPPERS'], [SCAN_LIST_KEY]: namedChoices[SCAN_LIST_KEY] } : sheet.label === 'Site Lists' ? { '__site_voice_list': { formula: 'unArchiveVoiceListNames', strict: false } } : sheet.label === 'Voice Lists' ? { '__voice_list_member': { formula: 'unArchiveChannelPoolNames', strict: true } } : {};
         const fixedChoices = sheet.label === 'Contacts' ? { '__contact_type': CONTACT_CALL_TYPE_OPTIONS } : sheet.label === 'Zone Channels' ? { 'field:CP_PERSTYPE': ZONE_CHANNEL_TYPE_OPTIONS, 'field:CP_VOICEPRIVACYEN': TRUE_FALSE_OPTIONS, 'field:CP_LCPALATRM': TRUE_FALSE_OPTIONS, 'field:CP_RXONLYEN': TRUE_FALSE_OPTIONS } : sheet.label === 'Channel Pool' ? { '__parent_label': CHANNEL_POOL_ZONE_OPTIONS, 'field:CP_PERSTYPE': CHANNEL_POOL_TYPE_OPTIONS, 'field:CP_RXONLYEN': TRUE_FALSE_OPTIONS } : sheet.label === 'Security' ? { '__privacy_type': SECURITY_PRIVACY_TYPE_OPTIONS } : {};
         XLSX.utils.book_append_sheet(wb, worksheetFromPresentation(presentation, choices, fixedChoices), sheet.sheetName);
         meta.push([sheet.sheetName, sheet.id, sheet.category, sheet.collectionName, sheet.layout, JSON.stringify(presentation.columnMap)]);
       }
       const treeRows = [['id', 'parent_id', 'order', 'tag', 'attributes_json', 'text'], ...model.tree.records.map(r => [r.id, r.parentId, r.order, r.tag, JSON.stringify(r.attrs), r.text])];
-      const choiceRows = Array.from({ length: 500 }, () => ['', '', '', '']);
-      const choices = XLSX.utils.aoa_to_sheet([['Voice List Names', 'Site List Names', 'RAS Key Aliases', 'Privacy Key Aliases'], ...choiceRows]);
+      const choiceRows = Array.from({ length: 500 }, (_, index) => ['', '', '', '', scanListChoices[index] || '']);
+      const choices = XLSX.utils.aoa_to_sheet([['Voice List Names', 'Site List Names', 'RAS Key Aliases', 'Privacy Key Aliases', 'Scan List Names'], ...choiceRows]);
       const securitySheet = security ? `'${security.sheet.sheetName.replace(/'/g, "''")}'` : '';
       const liveUniqueChoiceFormula = (item, column, row) => {
         if (!item) return '';
@@ -888,7 +906,7 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
     }
     if (info.sheet === 'Zones' && row['@alias'] !== undefined) setField(node, 'ZP_ZONEALIAS', text(row['@alias']));
     if (info.collectionName === 'ZoneItems' && row['@alias'] !== undefined) setField(node, 'CP_CNVPERSALIAS', text(row['@alias']));
-    if (info.collectionName === 'ZoneItems') ['CP_UKPPERS', 'CP_ENHCPRVCYIT', 'CP_RASDATAITEM', 'CP_TRUNKCHANLISTIT', 'CP_LCPSTLSTIT'].forEach(name => {
+    if (info.collectionName === 'ZoneItems') ['CP_UKPPERS', 'CP_ENHCPRVCYIT', 'CP_RASDATAITEM', 'CP_TRUNKCHANLISTIT', 'CP_LCPSTLSTIT', SCAN_LIST_FIELD].forEach(name => {
       if (row[fieldKey(name)] === undefined) return;
       const field = directChildren(node, 'field').find(item => item.getAttribute('name') === name);
       if (!field) return;
@@ -1082,6 +1100,11 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
     if (!alias) throw new Error(`${info.sheet}: every channel row needs a Name / Alias.`);
     if (!CHANNEL_TYPE_LABELS[type]) throw new Error(`${alias}: select a supported Channel Type.`);
     const originalType = node ? directFieldValue(node, 'CP_PERSTYPE') : '';
+    // Read before fields the channel type lacks are cleared below, so a value
+    // entered for an unsupported field is reported instead of dropped.
+    const requested = (key) => key in row ? text(row[key]).trim() : '';
+    const requestedContact = requested('field:CP_UKPPERS'), requestedScanList = requested(SCAN_LIST_KEY);
+    const originalScanList = node ? directFieldValue(node, SCAN_LIST_FIELD) : '';
     const originalValues = new Map(['CP_RXFREQ', 'CP_TXFREQ', 'CP_COLORCODE', 'CP_UKPPERS', 'CP_TRUNKCHANLISTIT', 'CP_LCPSTLSTIT'].map(name => [name, node ? directFieldValue(node, name).trim() : '']));
     const typeChanged = Boolean(node && originalType !== type);
     if (typeChanged) {
@@ -1090,7 +1113,7 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
       node.replaceWith(replacement);
       node = replacement;
     }
-    const emptyMeansNone = new Set(['CP_ENHCPRVCYIT', 'CP_RASDATAITEM', 'CP_SCANLISTIT', 'CP_TGLISTIT', 'CP_EMSYSIT']);
+    const emptyMeansNone = new Set(['CP_ENHCPRVCYIT', 'CP_RASDATAITEM', SCAN_LIST_FIELD, 'CP_TGLISTIT', 'CP_EMSYSIT']);
     if (wasExisting && !typeChanged) {
       // CPS has no blank form for these references; clearing one means "none".
       for (const name of emptyMeansNone) {
@@ -1119,12 +1142,26 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
     if (['DGTLCONV6PT25', 'CAPPLUSVOICECONV'].includes(type) && (requiredMissing('CP_COLORCODE', colorCode) || (colorCode && (!/^\d+$/.test(colorCode) || Number(colorCode) > 15)))) throw new Error(`${alias}: Color Code is required and must be a whole number from 0 through 15.`);
     if (colorCode && (!/^\d+$/.test(colorCode) || Number(colorCode) > 15)) throw new Error(`${alias}: Color Code must be a whole number from 0 through 15.`);
     const contact = text(row['field:CP_UKPPERS']).trim();
+    const hasField = (name) => directChildren(node, 'field').some(field => field.getAttribute('name') === name);
     if (info.sheet === 'Channel Pool' && 'field:CP_UKPPERS' in row) {
-      const hasContact = directChildren(node, 'field').some(field => field.getAttribute('name') === 'CP_UKPPERS');
-      if (!hasContact && contact && contact.toUpperCase() !== 'NONE') throw new Error(`${alias}: ${displayValue('field:CP_PERSTYPE', type)} channels have no Contact Name in CPS. Leave it blank.`);
+      const hasContact = hasField('CP_UKPPERS');
+      if (!hasContact && requestedContact && requestedContact.toUpperCase() !== 'NONE') throw new Error(`${alias}: ${displayValue('field:CP_PERSTYPE', type)} channels have no Contact Name in CPS. Leave it blank.`);
       // A pool channel's contact is optional; blank means none.
       if (hasContact && !contact) row['field:CP_UKPPERS'] = 'NONE';
       if (!hasContact) row['field:CP_UKPPERS'] = '';
+    }
+    if (SCAN_LIST_KEY in row) {
+      const isNone = !requestedScanList || requestedScanList.toUpperCase() === 'NONE';
+      if (!hasField(SCAN_LIST_FIELD)) {
+        if (!isNone) throw new Error(`${alias}: ${displayValue('field:CP_PERSTYPE', type)} channels have no Scan List in CPS. Leave it blank.`);
+        row[SCAN_LIST_KEY] = '';
+      } else if (isNone) row[SCAN_LIST_KEY] = 'NONE';
+      else {
+        const list = scanListNames(doc).find(name => matchName(name) === matchName(requestedScanList));
+        if (list) row[SCAN_LIST_KEY] = `${SCAN_LIST_PREFIX}${list}`;
+        else if (originalScanList && requestedScanList === scanListLabel(originalScanList)) row[SCAN_LIST_KEY] = originalScanList;
+        else throw new Error(`${alias}: Scan List "${requestedScanList}" is not a scan list in this codeplug. Choose one from the list or None.`);
+      }
     }
     if (info.sheet === 'Zone Channels' && ['DGTLCONV6PT25', 'CAPPLUSSYSCONV', 'LINKEDCAPPLUSSYSCONV'].includes(type) && (!contact || contact.toUpperCase() === 'NONE') && (!wasExisting || typeChanged || (originalValues.get('CP_UKPPERS') && originalValues.get('CP_UKPPERS').toUpperCase() !== 'NONE'))) throw new Error(`${alias}: ${displayValue('field:CP_PERSTYPE', type)} needs a Contact Name.`);
     const voiceList = text(row['field:CP_TRUNKCHANLISTIT']).trim();
