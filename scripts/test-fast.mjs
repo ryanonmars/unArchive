@@ -6,7 +6,7 @@ import * as XLSX from 'xlsx';
 import JSZip from 'jszip';
 import { CPS_BLUEPRINTS } from '../blueprints.generated.js';
 import {
-  exportWorkbookFrom, workbookFrom, rowsFor, replaceRows, appendRow, importWorkbook,
+  document, exportWorkbookFrom, workbookFrom, rowsFor, replaceRows, appendRow, importWorkbook,
   xmlDocument, directElements, category, allChannels, fieldOf, channelType
 } from './test-harness.mjs';
 import { syntheticCodeplug } from './test-fixture.mjs';
@@ -54,6 +54,33 @@ async function rejected(workbook, pattern) {
   assert.match(result.message, pattern);
 }
 const fresh = () => workbookFrom(bytes);
+
+// A receive-only channel needs no contact, as in CPS: new Digital, Capacity
+// Plus, and Linked Capacity Plus channels with Receive Only True and no
+// contact import; the same channels able to transmit still need one.
+{
+  for (const [type, extra] of [['Digital', { 'Receive Frequency': '461.4000', 'Transmit Frequency': '461.4000', 'Color Code': '1' }], ['Capacity Plus', { 'Voice List': 'VOICE A' }], ['Linked Capacity Plus', { 'Site List': 'SITES A' }]]) {
+    const listening = fresh();
+    appendRow(listening, 'Zone Channels', { 'Assigned Zone': 'ZONE A', 'Name / Alias': 'LISTEN ONLY', 'Channel Type': type, 'Receive Only': 'True', ...extra });
+    const doc = await imported(listening);
+    assert.deepEqual([value(channelIn(doc, 'LISTEN ONLY'), 'CP_RXONLYEN'), value(channelIn(doc, 'LISTEN ONLY'), 'CP_UKPPERS')], ['True', 'NONE'], `${type} receive-only without a contact`);
+    const talking = fresh();
+    appendRow(talking, 'Zone Channels', { 'Assigned Zone': 'ZONE A', 'Name / Alias': 'TALK NO CONTACT', 'Channel Type': type, ...extra });
+    await rejected(talking, new RegExp(`TALK NO CONTACT: ${type} needs a Contact Name`));
+  }
+}
+
+// "Create all channels as new" starts unticked, and says what it resets.
+{
+  const box = document.getElementById('import-as-new');
+  assert.equal(box.type, 'checkbox');
+  // No checked attribute, so the page loads with it off. (linkedom leaves the
+  // checked property undefined until set; a browser reports false.)
+  assert.equal(box.hasAttribute('checked'), false);
+  assert.equal(Boolean(box.checked), false);
+  assert.equal(box.closest('label').textContent.trim(), 'Create all channels as new');
+  assert.match(box.closest('label').nextElementSibling.textContent, /every other channel setting, such as time slot, transmit power, RX group list, emergency system, and PL tones, resets to the CPS template default/);
+}
 
 // READ FIRST tells people to clear settings a changed channel type lacks.
 assert.match(rowsFor(fresh(), 'READ FIRST').flat().join(' '), /Clear any setting the new type does not have, such as Privacy Enabled and the key aliases when a Digital channel becomes Analog/);
@@ -657,6 +684,12 @@ for (const pool of [true, false]) {
   assert.ok(keptOver.notes.some(note => /Renamed and changed in several other ways, but these rows kept their existing channel records .*: CH 1\. If they are meant to be new channels, tick "Create all channels as new"/.test(note)), keptOver.notes.join(' | '));
   const newOver = await run(typedOver(), { createAllNew: true });
   assert.equal(markerOf(newOver.doc, 'CH 1'), templateMarker('DGTLCONV6PT25'));
+  // The note names hidden settings that differed from the template and so
+  // were reset, and leaves out ones that matched it, such as GPS Revert Channel.
+  const resetNote = newOver.notes.find(note => /differ from the CPS template defaults the new channels use/.test(note)) || '';
+  assert.match(resetNote, /Time-Out Timer on 8/);
+  assert.match(resetNote, /RX Group List on 1/);
+  assert.doesNotMatch(resetNote, /GPS|GPSRVRTPERSIT/);
 
   // Duplicate IDs (a copied row): refused normally, ignored in rebuild mode.
   const copied = () => setRows(book(), 'Zone Channels', (rows, col) => { const copy = [...rows.find(row => row[1] === 'DIG TALK')]; copy[col['Name / Alias']] = 'DIG TALK COPY'; rows.push(copy); });

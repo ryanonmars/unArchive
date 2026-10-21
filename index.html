@@ -81,7 +81,7 @@
           <button id="copy-output" class="secondary" disabled>Copy XML to clipboard</button>
         </div>
         <label class="check"><input id="import-as-new" type="checkbox"> Create all channels as new</label>
-        <p class="hint">Builds every Zone Channels and Channel Pool row from its CPS template using only the settings in the workbook, so nothing is carried over from the old channels. Use it when you are replacing a configuration. Leave it off to edit existing channels and keep their other settings.</p>
+        <p class="hint">Builds every Zone Channels and Channel Pool row from its CPS template. Only the settings in the workbook are applied; every other channel setting, such as time slot, transmit power, RX group list, emergency system, and PL tones, resets to the CPS template default. Use it when you are replacing a configuration. Leave it off to edit existing channels and keep their other settings.</p>
         <p id="output-status" class="status" aria-live="polite"></p>
         <div id="import-summary" class="import-summary" aria-live="polite"></div>
 

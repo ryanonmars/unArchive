@@ -35,6 +35,11 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
     CP_TRUNKCHANLISTIT: 'Voice List', CP_LCPSTLSTIT: 'Site List', CP_LCPALATRM: 'Auto Roam',
     CP_ENHCPRVCYIT: 'Privacy Key Alias', CP_RASDATAITEM: 'RAS Key Alias', RC_RAS_PROPRIETARY_KEY_ID: 'RAS Proprietary Key ID',
     CP_TGLISTIT: 'RX Group List', CP_SCNROAMLISTIT: 'Scan List', CP_EMSYSIT: 'Emergency System', CP_UKPPERS: 'Contact Name',
+    CP_PHONESYSIT: 'Phone System', CP_DATAREVCHANLISTIT: 'Data Revert Channel List', CP_MANDOWNPROFILEITEM: 'Man Down Profile',
+    CP_TXSIGSYSIT: 'TX Signaling System', CP_RXSIGSYSIT: 'RX Signaling System', CP_GPSRVRTPERSIT: 'GPS Revert Channel',
+    CP_TOT: 'Time-Out Timer', CP_CHNLBWDTH: 'Channel Bandwidth', CP_TXTPLCODE: 'TX PL Code', CP_RXTPLCODE: 'RX PL Code',
+    CP_TXSQCHTY: 'TX Squelch Type', CP_XSQCHTY: 'RX Squelch Type', CP_TXTDPLCD: 'TX DPL Code', CP_RXDPLCD: 'RX DPL Code',
+    CP_TXTTPLFREQ: 'TX PL Frequency', CP_RXTPLFREQ: 'RX PL Frequency', CP_TALKAROUNDEN: 'Talkaround', CP_LONEWORKEN: 'Lone Worker',
     DU_CALLALIAS: 'Contact Name', DU_CALLLSTID: 'Call ID', DU_CALLTYPE: 'Call Type',
     CAPPLUSUCL_CALLALIAS: 'Contact Name', CAPPLUSUCL_CALLLSTID: 'Call ID',
     CAPPLUSUCL_CALLTYPE: 'Call Type', TP_TRUNKPERALIAS: 'Voice List Name',
@@ -1144,13 +1149,17 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
     if (problems.length) throw new Error(`${problems.slice(0, 4).join('  ')}${problems.length > 4 ? ` (+${problems.length - 4} more)` : ''}`);
     return claims;
   }
-  // Reference fields a channel holds that the workbook does not show, such as
-  // an RX group list or emergency system. A channel created as new starts
-  // with the template's none for each.
-  function hiddenChannelReferences(node, visibleKeys) {
+  // Settings the workbook does not show where an old channel differs from its
+  // type's CPS template, such as a time slot, RX group list, or PL tone. A
+  // channel created as new has the template's value for each.
+  function hiddenChannelDifferences(node, visibleKeys) {
+    const template = blueprintNode(node.ownerDocument, CPS_BLUEPRINTS.channels[directFieldValue(node, 'CP_PERSTYPE')]);
+    if (!template) return [];
     return directChildren(node, 'field').filter(field => {
       const name = field.getAttribute('name');
-      return field.hasAttribute('Name') && /(IT|ITEM)$/.test(name) && !visibleKeys.has(fieldKey(name)) && text(field.textContent).trim() && text(field.textContent).trim().toUpperCase() !== 'NONE';
+      if (visibleKeys.has(fieldKey(name)) || name === 'CP_CNVPERSALIAS') return false;
+      const templateField = directChildren(template, 'field').find(item => item.getAttribute('name') === name);
+      return templateField && text(templateField.textContent) !== text(field.textContent);
     }).map(field => friendlyField(field.getAttribute('name')));
   }
   // Names that lists outside the zones (scan lists, roam lists, and similar)
@@ -1178,8 +1187,9 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
     if (createAllNew) {
       line(`${outcome.created.length} channels created as new from their CPS templates${removed.length ? `, replacing ${removed.length} old channels` : ''}.`);
       const dropped = new Map();
-      for (const node of removed) for (const label of hiddenChannelReferences(node, visibleKeys)) dropped.set(label, (dropped.get(label) || 0) + 1);
-      if (dropped.size) note(`The old channels also had settings this workbook does not show, which the new channels do not carry: ${[...dropped].map(([label, count]) => `${label} on ${count}`).join(', ')}. Set them in CPS if they are still needed.`);
+      for (const node of removed) for (const label of hiddenChannelDifferences(node, visibleKeys)) dropped.set(label, (dropped.get(label) || 0) + 1);
+      const ranked = [...dropped].sort((a, b) => b[1] - a[1]);
+      if (ranked.length) note(`Old channels had settings this workbook does not show that differ from the CPS template defaults the new channels use: ${ranked.slice(0, 8).map(([label, count]) => `${label} on ${count}`).join(', ')}${ranked.length > 8 ? ` and ${ranked.length - 8} more` : ''}. Set them in CPS if they are still needed.`);
       return { title: info.sheet, lines };
     }
     const removedNames = new Set(removed.map(node => originalState.get(node).alias));
@@ -1340,7 +1350,11 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
         else throw new Error(`${alias}: Scan List "${requestedScanList}" is not a scan list in this codeplug. Choose one from the list or None.`);
       }
     }
-    if (info.sheet === 'Zone Channels' && ['DGTLCONV6PT25', 'CAPPLUSSYSCONV', 'LINKEDCAPPLUSSYSCONV'].includes(type) && (!contact || contact.toUpperCase() === 'NONE') && (!wasExisting || typeChanged || (originalValues.get('CP_UKPPERS') && originalValues.get('CP_UKPPERS').toUpperCase() !== 'NONE'))) throw new Error(`${alias}: ${displayValue('field:CP_PERSTYPE', type)} needs a Contact Name.`);
+    // A receive-only channel never transmits, so CPS lets it have no contact.
+    const receiveOnly = text(row['field:CP_RXONLYEN']).trim() === 'True';
+    if (info.sheet === 'Zone Channels' && ['DGTLCONV6PT25', 'CAPPLUSSYSCONV', 'LINKEDCAPPLUSSYSCONV'].includes(type) && !receiveOnly && (!contact || contact.toUpperCase() === 'NONE') && (!wasExisting || typeChanged || (originalValues.get('CP_UKPPERS') && originalValues.get('CP_UKPPERS').toUpperCase() !== 'NONE'))) throw new Error(`${alias}: ${displayValue('field:CP_PERSTYPE', type)} needs a Contact Name.`);
+    // CPS writes no contact as NONE, never blank.
+    if ('field:CP_UKPPERS' in row && !text(row['field:CP_UKPPERS']).trim() && hasField('CP_UKPPERS')) row['field:CP_UKPPERS'] = 'NONE';
     const voiceList = text(row['field:CP_TRUNKCHANLISTIT']).trim();
     if (info.sheet === 'Zone Channels' && type === 'CAPPLUSSYSCONV' && (!voiceList || voiceList.toUpperCase() === 'NONE') && (!wasExisting || typeChanged || (originalValues.get('CP_TRUNKCHANLISTIT') && originalValues.get('CP_TRUNKCHANLISTIT').toUpperCase() !== 'NONE'))) throw new Error(`${alias}: Capacity Plus needs a Voice List.`);
     const siteList = text(row['field:CP_LCPSTLSTIT']).trim();
