@@ -13,7 +13,9 @@ src-tauri/icons/*
 *.xml
 *.xlsx
 
-# Local-only tooling that reads the private CPS fixtures
+# Local-only tooling that reads the private CPS fixtures. The full suite also
+# names records from those customer codeplugs, so it stays local; the tracked
+# fast suite (scripts/test-fast.mjs) uses a synthetic codeplug instead.
 scripts/create-scratch-test-workbook.mjs
 scripts/test-import-safety.mjs
 

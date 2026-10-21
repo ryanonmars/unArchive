@@ -2,8 +2,8 @@ name: Windows installer
 
 # Push a tag such as v0.1.0 to build the installer and publish a release.
 # Run the workflow manually to build an installer artifact without releasing.
-# The import safety tests need private CPS fixtures, so run `npm test` locally
-# before tagging a release.
+# The full import safety tests need private CPS fixtures, so run
+# `npm run test:full` locally before tagging a release.
 on:
   push:
     tags: ['v*.*.*']

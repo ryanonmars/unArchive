@@ -50,10 +50,10 @@ The shareable installer will be created under `src-tauri\target\release\bundle\n
 
 ## Publish a release
 
-The **Windows installer** GitHub Actions workflow builds and signs the installer on a Windows runner, then publishes a release with the setup executable, its signature, and the `latest.json` update manifest that installed apps check. The version comes from the tag, so there is no need to edit version numbers before releasing, but each tag must be higher than the last release or installed apps will not offer it. Run the import safety tests locally first:
+The **Windows installer** GitHub Actions workflow builds and signs the installer on a Windows runner, then publishes a release with the setup executable, its signature, and the `latest.json` update manifest that installed apps check. The version comes from the tag, so there is no need to edit version numbers before releasing, but each tag must be higher than the last release or installed apps will not offer it. Run the full import safety tests locally first:
 
 ```powershell
-npm test
+npm run test:full
 git tag v0.2.1
 git push origin v0.2.1
 ```
@@ -66,7 +66,12 @@ Installed apps only accept updates signed with the private key that matches the 
 
 ## CPS blueprints and local tests
 
-New contacts, channels, zones, and lists are built from the CPS-generated records in `blueprints.generated.js`, with every name, call ID, and frequency replaced by a placeholder. Codeplugs and workbooks are never committed. The blueprint generator (`npm run generate:blueprints`) and the import safety tests (`npm test`) read two local CPS fixtures, `cps-clipboard-source.xml` and `cps-clipboard-source-linked-plus-analog.xml`, which stay outside the repository along with `scripts/test-import-safety.mjs`.
+New contacts, channels, zones, and lists are built from the CPS-generated records in `blueprints.generated.js`, with every name, call ID, and frequency replaced by a placeholder. Codeplugs and workbooks are never committed. There are two test suites:
+
+- `npm test` runs the fast suite, `scripts/test-fast.mjs`, in a few seconds. It builds a small synthetic codeplug from the committed blueprints (`scripts/test-fixture.mjs`), so it needs no customer data and runs from a fresh clone. It covers the Channel Pool drop-downs and contacts, Scan List, and Receive Only, and checks that an unchanged round trip rebuilds every record exactly.
+- `npm run test:full` runs the fast suite and then the full regression suite, `scripts/test-import-safety.mjs`, against two local CPS fixtures, `cps-clipboard-source.xml` and `cps-clipboard-source-linked-plus-analog.xml`. It takes a few minutes. The fixtures contain customer data and the suite names records from them, so both stay outside the repository; run it before every release.
+
+Both suites load the app through `scripts/test-harness.mjs`. The blueprint generator (`npm run generate:blueprints`) also reads the local fixtures.
 
 Windows 10 (version 1803+) and Windows 11 normally include the WebView2 runtime Tauri uses. The installer is configured to download it if it is missing, keeping the installer lightweight. For air-gapped computers, switch the `webviewInstallMode` in `src-tauri/tauri.conf.json` to Tauri’s offline installer mode; this substantially increases the installer size.
 

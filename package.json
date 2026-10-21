@@ -7,7 +7,8 @@
     "generate:blueprints": "node scripts/generate-blueprints.mjs",
     "dev": "vite",
     "build": "vite build",
-    "test": "node scripts/test-import-safety.mjs",
+    "test": "node scripts/test-fast.mjs",
+    "test:full": "node scripts/test-fast.mjs && node scripts/test-import-safety.mjs",
     "tauri": "tauri",
     "package:windows": "tauri build --bundles nsis",
     "version:set": "node scripts/set-version.mjs"

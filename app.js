@@ -1155,6 +1155,13 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
     if ('field:CP_RXONLYEN' in row && !hasField('CP_RXONLYEN')) {
       if (requestedReceiveOnly) throw new Error(`${alias}: ${displayValue('field:CP_PERSTYPE', type)} channels have no Receive Only setting in CPS. Leave Receive Only blank.`);
       row['field:CP_RXONLYEN'] = '';
+    } else if ('field:CP_RXONLYEN' in row) {
+      // CPS stores Receive Only as True or False and never blank. A blank cell
+      // keeps the record's value: the stored one for an existing channel, the
+      // CPS default for a new channel or a changed type.
+      const choice = TRUE_FALSE_OPTIONS.find(option => option.toLowerCase() === requestedReceiveOnly.toLowerCase());
+      if (requestedReceiveOnly && !choice) throw new Error(`${alias}: Receive Only must be True or False, not "${requestedReceiveOnly}".`);
+      row['field:CP_RXONLYEN'] = choice || directFieldValue(node, 'CP_RXONLYEN');
     }
     if (SCAN_LIST_KEY in row) {
       const isNone = !requestedScanList || requestedScanList.toUpperCase() === 'NONE';
