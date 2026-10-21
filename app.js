@@ -43,7 +43,7 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
   const FOCUSED_COLUMNS = {
     Zones: ['@alias'],
     'Zone Channels': ['@alias', 'field:CP_UKPPERS', 'field:CP_PERSTYPE', 'field:CP_VOICEPRIVACYEN', 'field:CP_ENHCPRVCYIT', 'field:CP_RASDATAITEM', 'field:CP_TRUNKCHANLISTIT', 'field:CP_LCPSTLSTIT', 'field:CP_LCPALATRM', 'field:CP_RXFREQ', 'field:CP_TXFREQ', 'field:CP_COLORCODE', 'field:CP_TXINHXPLEN', 'field:CP_MYCALLADCRTR', 'field:CP_RXONLYEN', 'field:CP_SCNROAMLISTIT'],
-    'Channel Pool': ['@alias', 'field:CP_UKPPERS', 'field:CP_PERSTYPE', 'field:CP_RXFREQ', 'field:CP_TXFREQ', 'field:CP_COLORCODE', 'field:CP_RXONLYEN', 'field:CP_SCNROAMLISTIT']
+    'Channel Pool': ['@alias', 'field:CP_UKPPERS', 'field:CP_PERSTYPE', 'field:CP_VOICEPRIVACYEN', 'field:CP_ENHCPRVCYIT', 'field:CP_RASDATAITEM', 'field:CP_RXFREQ', 'field:CP_TXFREQ', 'field:CP_COLORCODE', 'field:CP_RXONLYEN', 'field:CP_SCNROAMLISTIT']
   };
   const CHANNEL_TYPE_LABELS = {
     CAPPLUSSYSCONV: 'Capacity Plus',
@@ -73,7 +73,9 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
   // Channel Pool rows always import into the pool, whatever Assigned Zone
   // says. Capacity Plus Voice is the repeater channel that voice lists name.
   // A Digital pool channel keeps a contact, such as a Digital All Call, in the
-  // radio for scanning without putting it in a zone everyone can select.
+  // radio for scanning without putting it in a zone everyone can select. It
+  // has the same CPS record as a Digital zone channel, so the tab shows its
+  // privacy and RAS settings too.
   const CHANNEL_POOL_ZONE_OPTIONS = ['Channel Pool'];
   const CHANNEL_POOL_TYPE_OPTIONS = ['Capacity Plus Voice', 'Digital'];
   const TRUE_FALSE_OPTIONS = ['True', 'False'];
@@ -826,8 +828,8 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
         CalcPr: { calcMode: 'auto', fullCalcOnLoad: '1', forceFullCalc: '1' }
       };
       for (const { sheet, presentation } of presentations) {
-        const choices = sheet.label === 'Zone Channels' ? namedChoices : sheet.label === 'Channel Pool' ? { 'field:CP_UKPPERS': namedChoices['field:CP_UKPPERS'], [SCAN_LIST_KEY]: namedChoices[SCAN_LIST_KEY] } : sheet.label === 'Site Lists' ? { '__site_voice_list': { formula: 'unArchiveVoiceListNames', strict: false } } : sheet.label === 'Voice Lists' ? { '__voice_list_member': { formula: 'unArchiveChannelPoolNames', strict: true } } : {};
-        const fixedChoices = sheet.label === 'Contacts' ? { '__contact_type': CONTACT_CALL_TYPE_OPTIONS } : sheet.label === 'Zone Channels' ? { 'field:CP_PERSTYPE': ZONE_CHANNEL_TYPE_OPTIONS, 'field:CP_VOICEPRIVACYEN': TRUE_FALSE_OPTIONS, 'field:CP_LCPALATRM': TRUE_FALSE_OPTIONS, 'field:CP_RXONLYEN': TRUE_FALSE_OPTIONS } : sheet.label === 'Channel Pool' ? { '__parent_label': CHANNEL_POOL_ZONE_OPTIONS, 'field:CP_PERSTYPE': CHANNEL_POOL_TYPE_OPTIONS, 'field:CP_RXONLYEN': TRUE_FALSE_OPTIONS } : sheet.label === 'Security' ? { '__privacy_type': SECURITY_PRIVACY_TYPE_OPTIONS } : {};
+        const choices = sheet.label === 'Zone Channels' ? namedChoices : sheet.label === 'Channel Pool' ? Object.fromEntries(['field:CP_UKPPERS', 'field:CP_ENHCPRVCYIT', 'field:CP_RASDATAITEM', SCAN_LIST_KEY].map(key => [key, namedChoices[key]])) : sheet.label === 'Site Lists' ? { '__site_voice_list': { formula: 'unArchiveVoiceListNames', strict: false } } : sheet.label === 'Voice Lists' ? { '__voice_list_member': { formula: 'unArchiveChannelPoolNames', strict: true } } : {};
+        const fixedChoices = sheet.label === 'Contacts' ? { '__contact_type': CONTACT_CALL_TYPE_OPTIONS } : sheet.label === 'Zone Channels' ? { 'field:CP_PERSTYPE': ZONE_CHANNEL_TYPE_OPTIONS, 'field:CP_VOICEPRIVACYEN': TRUE_FALSE_OPTIONS, 'field:CP_LCPALATRM': TRUE_FALSE_OPTIONS, 'field:CP_RXONLYEN': TRUE_FALSE_OPTIONS } : sheet.label === 'Channel Pool' ? { '__parent_label': CHANNEL_POOL_ZONE_OPTIONS, 'field:CP_PERSTYPE': CHANNEL_POOL_TYPE_OPTIONS, 'field:CP_VOICEPRIVACYEN': TRUE_FALSE_OPTIONS, 'field:CP_RXONLYEN': TRUE_FALSE_OPTIONS } : sheet.label === 'Security' ? { '__privacy_type': SECURITY_PRIVACY_TYPE_OPTIONS } : {};
         XLSX.utils.book_append_sheet(wb, worksheetFromPresentation(presentation, choices, fixedChoices), sheet.sheetName);
         meta.push([sheet.sheetName, sheet.id, sheet.category, sheet.collectionName, sheet.layout, JSON.stringify(presentation.columnMap)]);
       }
@@ -1182,7 +1184,9 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
     // changed to Analog, would otherwise be dropped or break the record.
     for (const [name, label] of Object.entries(CHANNEL_KEY_ALIAS_FIELDS)) {
       const key = fieldKey(name), requestedAlias = requestedKeyAliases[name];
-      if (!(key in row) || hasField(name)) continue;
+      if (!(key in row)) continue;
+      // Excel's drop-down accepts None in any case; CPS stores it as NONE.
+      if (hasField(name)) { if (requestedAlias.toUpperCase() === 'NONE') row[key] = 'NONE'; continue; }
       if (requestedAlias && requestedAlias.toUpperCase() !== 'NONE') throw new Error(`${alias}: ${displayValue('field:CP_PERSTYPE', type)} channels have no ${label} in CPS. Leave ${label} blank or None.`);
       row[key] = '';
     }

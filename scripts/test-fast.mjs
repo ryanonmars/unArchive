@@ -234,9 +234,9 @@ for (const pool of [true, false]) {
     const added = fresh();
     appendRow(added, 'Channel Pool', { 'Name / Alias': 'NEW VOICE', 'Channel Type': 'Capacity Plus Voice', 'Receive Frequency': '463.6000', 'Transmit Frequency': '468.6000', 'Color Code': '1', 'Receive Only': entry });
     await rejected(added, /NEW VOICE: Capacity Plus Voice channels have no Receive Only setting in CPS/);
-    await rejected(edit(fresh(), 'Channel Pool', { 'POOL ALL CALL': { 'Channel Type': 'Capacity Plus Voice', 'Contact Name': '', 'Scan List': '', 'Receive Only': entry } }), /POOL ALL CALL: Capacity Plus Voice channels have no Receive Only setting in CPS/);
+    await rejected(edit(fresh(), 'Channel Pool', { 'POOL ALL CALL': { 'Channel Type': 'Capacity Plus Voice', 'Contact Name': '', 'Scan List': '', 'Privacy Enabled': '', 'Privacy Key Alias': '', 'RAS Key Alias': '', 'Receive Only': entry } }), /POOL ALL CALL: Capacity Plus Voice channels have no Receive Only setting in CPS/);
   }
-  const converted = await imported(edit(fresh(), 'Channel Pool', { 'POOL ALL CALL': { 'Channel Type': 'Capacity Plus Voice', 'Contact Name': '', 'Scan List': '', 'Receive Only': '' } }));
+  const converted = await imported(edit(fresh(), 'Channel Pool', { 'POOL ALL CALL': { 'Channel Type': 'Capacity Plus Voice', 'Contact Name': '', 'Scan List': '', 'Privacy Enabled': '', 'Privacy Key Alias': '', 'RAS Key Alias': '', 'Receive Only': '' } }));
   assert.equal(channelType(channelIn(converted, 'POOL ALL CALL')), 'CAPPLUSVOICECONV');
   assert.equal(fieldOf(channelIn(converted, 'POOL ALL CALL'), 'CP_RXONLYEN'), undefined);
   assert.equal(shape(channelIn(converted, 'POOL ALL CALL')), blueprintShape('CAPPLUSVOICECONV'), 'The converted channel has exactly the CPS template fields.');
@@ -262,7 +262,7 @@ for (const pool of [true, false]) {
   };
   const zone = rowsFor(fresh(), 'Zone Channels');
   const cell = (alias, header) => zone.find(row => row[1] === alias)[zone[0].indexOf(header)];
-  assert.ok(!rowsFor(fresh(), 'Channel Pool')[0].includes('Privacy Enabled') && !rowsFor(fresh(), 'Channel Pool')[0].includes('Auto Roam'), 'Only Zone Channels shows these columns.');
+  assert.ok(!rowsFor(fresh(), 'Channel Pool')[0].includes('Auto Roam'), 'Auto Roam is not on the Channel Pool tab.');
 
   for (const { header, field, types, fallback } of settings) {
     for (const type of Object.keys(CPS_BLUEPRINTS.channels)) {
@@ -406,6 +406,126 @@ for (const pool of [true, false]) {
   const fromAnalog = await imported(edit(keyed(), 'Zone Channels', { 'ANA TALK': { 'Channel Type': 'Digital', 'Contact Name': 'DIG 1', 'Color Code': '1', 'Scan List': '', 'Privacy Key Alias': 'PRIV A', 'RAS Key Alias': 'RAS A' } }));
   assert.deepEqual(Object.values(fields).map(name => value(channelIn(fromAnalog, 'ANA TALK'), name)), ['PRIV A', 'RAS A']);
   assert.equal(shape(channelIn(fromAnalog, 'ANA TALK')), blueprintShape('DGTLCONV6PT25'));
+}
+
+// The Channel Pool tab shows Privacy Enabled, Privacy Key Alias, and RAS Key
+// Alias, which a Digital pool channel has exactly as a Digital zone channel
+// does. Capacity Plus Voice has none of them.
+{
+  const SECURITY = ['Privacy Enabled', 'Privacy Key Alias', 'RAS Key Alias'];
+  const FIELDS = { 'Privacy Enabled': 'CP_VOICEPRIVACYEN', 'Privacy Key Alias': 'CP_ENHCPRVCYIT', 'RAS Key Alias': 'CP_RASDATAITEM' };
+  const poolXml = syntheticCodeplug({ poolKeys: true });
+  const poolSource = xmlDocument(poolXml);
+  const poolBytes = await exportWorkbookFrom(poolXml);
+  const book = () => workbookFrom(poolBytes);
+  const security = (doc, alias) => Object.values(FIELDS).map(name => value(channelIn(doc, alias), name));
+  const labels = (doc, alias) => ['CP_ENHCPRVCYIT', 'CP_RASDATAITEM'].map(name => fieldOf(channelIn(doc, alias), name).getAttribute('Name'));
+  const digitalTemplate = xmlDocument(`<r>${CPS_BLUEPRINTS.channels.DGTLCONV6PT25}</r>`).documentElement.firstElementChild;
+  const templateSecurity = Object.values(FIELDS).map(name => value(digitalTemplate, name));
+  assert.deepEqual(templateSecurity, ['False', 'NONE', 'NONE'], 'The CPS Digital template has privacy off and no keys.');
+
+  // Columns sit after Channel Type with the Zone Channels drop-downs.
+  const headers = rowsFor(book(), 'Channel Pool')[0];
+  assert.deepEqual(headers.slice(0, 7), ['Assigned Zone', 'Name / Alias', 'Contact Name', 'Channel Type', ...SECURITY]);
+  assert.equal(headers[1], 'Name / Alias', 'Voice List members still read pool names from column B.');
+  const xml = await sheetXml(poolBytes, 'Channel Pool');
+  for (const [header, formula, strict] of [['Privacy Enabled', '&quot;True,False&quot;', true], ['Privacy Key Alias', 'unArchivePrivacyKeyAliases', true], ['RAS Key Alias', 'unArchiveRASKeyAliases', true]]) {
+    const col = column(headers, header);
+    assert.match(xml, new RegExp(`showErrorMessage="${strict ? 1 : 0}" sqref="${col}2:${col}5000"><formula1>${formula}</formula1>`), `Channel Pool ${header} drop-down`);
+  }
+
+  // Export shows a pool channel's actual settings, including keys set in CPS
+  // while privacy is off; Capacity Plus Voice rows stay blank.
+  const pool = rowsFor(book(), 'Channel Pool');
+  const cells = alias => SECURITY.map(header => pool.find(row => row[1] === alias)[pool[0].indexOf(header)]);
+  assert.deepEqual(cells('POOL ALL CALL'), ['False', 'PRIV A', 'RAS A']);
+  assert.deepEqual(cells('VOICE 1'), ['', '', '']);
+  assert.deepEqual(rowsFor(book(), 'Security').slice(1).map(row => row.slice(0, 2)), [['RAS A', 'PRIV A']], 'Pool keys are listed on the Security sheet.');
+
+  // An unchanged import keeps every pool and zone record exactly.
+  const same = await imported(book());
+  for (const original of allChannels(poolSource)) assert.deepEqual(canonical(channelIn(same, original.getAttribute('alias'))), canonical(original), `${original.getAttribute('alias')} round-trips exactly.`);
+
+  // The CH 1 / CH 2 case: an existing pool channel renamed to CH 1 keeps its
+  // record and so its keys, which the tab now shows; a new CH 2 with the same
+  // visible settings gets the CPS template's privacy off and no keys.
+  const twin = book();
+  edit(twin, 'Channel Pool', { 'POOL ALL CALL': { 'Name / Alias': 'CH 1', 'Contact Name': 'DIG 1', 'Receive Frequency': '463.8000', 'Transmit Frequency': '468.8000', 'Color Code': '1', 'Receive Only': 'False', 'Scan List': 'None' } });
+  appendRow(twin, 'Channel Pool', { 'Assigned Zone': 'Channel Pool', 'Name / Alias': 'CH 2', 'Contact Name': 'DIG 1', 'Channel Type': 'Digital', 'Receive Frequency': '463.8000', 'Transmit Frequency': '468.8000', 'Color Code': '1', 'Receive Only': 'False', 'Scan List': 'None' });
+  const twinDoc = await imported(twin);
+  assert.deepEqual(security(twinDoc, 'CH 1'), ['False', 'PRIV A', 'RAS A'], 'CH 1 is the existing record and keeps its keys.');
+  assert.deepEqual(security(twinDoc, 'CH 2'), templateSecurity, 'CH 2 is new and inherits nothing.');
+  assert.deepEqual(labels(twinDoc, 'CH 2'), ['None', 'None']);
+  assert.equal(shape(channelIn(twinDoc, 'CH 2')), blueprintShape('DGTLCONV6PT25'));
+  const twinBack = rowsFor(workbookFrom(await exportWorkbookFrom(twinDoc.documentElement.toString())), 'Channel Pool');
+  const reexported = alias => SECURITY.map(header => twinBack.find(row => row[1] === alias)[twinBack[0].indexOf(header)]);
+  assert.deepEqual(reexported('CH 1'), ['False', 'PRIV A', 'RAS A'], 'Re-exported, CH 1 shows the keys it carries.');
+  assert.deepEqual(reexported('CH 2'), ['False', 'NONE', 'NONE']);
+
+  // Clearing the keys on the existing channel writes NONE with CPS's label;
+  // choosing keys and privacy on a new channel writes them.
+  const cleared = book();
+  edit(cleared, 'Channel Pool', { 'POOL ALL CALL': { 'Privacy Key Alias': '', 'RAS Key Alias': 'None' } });
+  appendRow(cleared, 'Channel Pool', { 'Name / Alias': 'CH 3', 'Channel Type': 'Digital', 'Receive Frequency': '463.9000', 'Transmit Frequency': '468.9000', 'Color Code': '1', 'Privacy Enabled': 'true', 'Privacy Key Alias': 'PRIV A', 'RAS Key Alias': 'RAS A' });
+  const clearedDoc = await imported(cleared);
+  assert.deepEqual(security(clearedDoc, 'POOL ALL CALL'), ['False', 'NONE', 'NONE']);
+  assert.deepEqual(labels(clearedDoc, 'POOL ALL CALL'), ['None', 'None']);
+  assert.deepEqual(security(clearedDoc, 'CH 3'), ['True', 'PRIV A', 'RAS A']);
+  assert.deepEqual(labels(clearedDoc, 'CH 3'), ['PRIV A', 'RAS A']);
+  for (const alias of ['POOL ALL CALL', 'CH 3']) assert.equal(shape(channelIn(clearedDoc, alias)), blueprintShape('DGTLCONV6PT25'));
+  // A blank Privacy Enabled keeps the stored value, as on Zone Channels.
+  const privacyOn = await imported(edit(book(), 'Channel Pool', { 'POOL ALL CALL': { 'Privacy Enabled': 'True' } }));
+  assert.equal(value(channelIn(privacyOn, 'POOL ALL CALL'), 'CP_VOICEPRIVACYEN'), 'True');
+  const keptBlank = await imported(edit(workbookFrom(await exportWorkbookFrom(privacyOn.documentElement.toString())), 'Channel Pool', { 'POOL ALL CALL': { 'Privacy Enabled': '' } }));
+  assert.equal(value(channelIn(keptBlank, 'POOL ALL CALL'), 'CP_VOICEPRIVACYEN'), 'True');
+
+  // Validation matches Zone Channels.
+  await rejected(edit(book(), 'Channel Pool', { 'POOL ALL CALL': { 'Privacy Key Alias': 'PRIV Z' } }), /POOL ALL CALL: Privacy Key Alias "PRIV Z" is not listed on the Security sheet/);
+  await rejected(edit(book(), 'Channel Pool', { 'POOL ALL CALL': { 'Privacy Enabled': 'Yes' } }), /POOL ALL CALL: Privacy Enabled must be True or False, not "Yes"/);
+
+  // Capacity Plus Voice: no value, even False; None for a key adds nothing.
+  for (const [header, entry, pattern] of [
+    ['Privacy Enabled', 'False', /VOICE 1: Capacity Plus Voice channels have no Privacy Enabled setting in CPS\. Leave Privacy Enabled blank\./],
+    ['Privacy Enabled', 'True', /VOICE 1: Capacity Plus Voice channels have no Privacy Enabled setting in CPS/],
+    ['Privacy Key Alias', 'PRIV A', /VOICE 1: Capacity Plus Voice channels have no Privacy Key Alias in CPS\. Leave Privacy Key Alias blank or None\./],
+    ['RAS Key Alias', 'RAS A', /VOICE 1: Capacity Plus Voice channels have no RAS Key Alias in CPS/]
+  ]) {
+    await rejected(edit(book(), 'Channel Pool', { 'VOICE 1': { [header]: entry } }), pattern);
+    const added = book();
+    appendRow(added, 'Channel Pool', { 'Name / Alias': 'VOICE 1 NEW', 'Channel Type': 'Capacity Plus Voice', 'Receive Frequency': '463.1500', 'Transmit Frequency': '468.1500', 'Color Code': '3', [header]: entry });
+    await rejected(added, new RegExp(pattern.source.replace('VOICE 1', 'VOICE 1 NEW')));
+  }
+  const voiceNone = await imported(edit(book(), 'Channel Pool', { 'VOICE 1': { 'Privacy Key Alias': 'None', 'RAS Key Alias': 'NONE' } }));
+  assert.deepEqual(canonical(channelIn(voiceNone, 'VOICE 1')), canonical(channelIn(poolSource, 'VOICE 1')));
+  // Changing the keyed Digital pool channel to Capacity Plus Voice needs its
+  // security cells cleared, like any setting the new type lacks.
+  const toVoice = { 'Channel Type': 'Capacity Plus Voice', 'Contact Name': '', 'Receive Only': '', 'Scan List': '' };
+  await rejected(edit(book(), 'Channel Pool', { 'POOL ALL CALL': { ...toVoice, 'Privacy Enabled': '' } }), /POOL ALL CALL: Capacity Plus Voice channels have no Privacy Key Alias in CPS/);
+  const voiced = await imported(edit(book(), 'Channel Pool', { 'POOL ALL CALL': { ...toVoice, 'Privacy Enabled': '', 'Privacy Key Alias': '', 'RAS Key Alias': '' } }));
+  assert.equal(shape(channelIn(voiced, 'POOL ALL CALL')), blueprintShape('CAPPLUSVOICECONV'));
+
+  // A workbook exported before these columns existed keeps the stored
+  // security settings, and its new Digital rows still get the CPS defaults.
+  const old = book();
+  const oldRows = rowsFor(old, 'Channel Pool');
+  const drop = SECURITY.map(header => oldRows[0].indexOf(header));
+  replaceRows(old, 'Channel Pool', oldRows.map(row => row.filter((_, index) => !drop.includes(index))));
+  const meta = rowsFor(old, '_CPS_META');
+  const poolMeta = meta.find(row => row[0] === 'Channel Pool');
+  const columnMap = JSON.parse(poolMeta[5]);
+  SECURITY.forEach(header => delete columnMap[header]);
+  poolMeta[5] = JSON.stringify(columnMap);
+  replaceRows(old, '_CPS_META', meta);
+  assert.ok(!rowsFor(old, 'Channel Pool')[0].includes('Privacy Key Alias'));
+  appendRow(old, 'Channel Pool', { 'Name / Alias': 'OLD BOOK NEW', 'Channel Type': 'Digital', 'Receive Frequency': '463.9500', 'Transmit Frequency': '468.9500', 'Color Code': '1' });
+  const oldDoc = await imported(old);
+  assert.deepEqual(canonical(channelIn(oldDoc, 'POOL ALL CALL')), canonical(channelIn(poolSource, 'POOL ALL CALL')), 'An older workbook leaves the pool keys exactly as stored.');
+  assert.deepEqual(security(oldDoc, 'OLD BOOK NEW'), templateSecurity);
+
+  // None in any letter case is written as CPS's NONE on Zone Channels too.
+  const zoneKeyed = await exportWorkbookFrom(syntheticCodeplug({ keys: true }));
+  const zoneNone = await imported(edit(workbookFrom(zoneKeyed), 'Zone Channels', { 'DIG TALK': { 'Privacy Key Alias': 'none', 'RAS Key Alias': 'None' } }));
+  assert.deepEqual(['CP_ENHCPRVCYIT', 'CP_RASDATAITEM'].map(name => [value(channelIn(zoneNone, 'DIG TALK'), name), fieldOf(channelIn(zoneNone, 'DIG TALK'), name).getAttribute('Name')]), [['NONE', 'None'], ['NONE', 'None']]);
 }
 
 console.log('Fast tests passed.');

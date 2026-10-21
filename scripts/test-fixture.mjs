@@ -63,8 +63,9 @@ function categoryOf(doc, name, records) {
 // Each channel type and its Receive Only and Scan List values, chosen so a
 // test can tell a kept value from a default.
 // With keys, the TALK channels of each type that has privacy carry invented
-// privacy and RAS key aliases.
-export function syntheticCodeplug({ pool = true, roamListChannel = false, keys = false } = {}) {
+// privacy and RAS key aliases. With poolKeys, the Digital pool channel carries
+// keys while Privacy Enabled stays False, as a channel set up in CPS can.
+export function syntheticCodeplug({ pool = true, roamListChannel = false, keys = false, poolKeys = false } = {}) {
   const doc = new DOMParser().parseFromString('<config></config>', 'application/xml');
   const keyed = keys ? { privacy: 'True', privacyKey: 'PRIV A', rasKey: 'RAS A' } : {};
   const contacts = [
@@ -86,7 +87,7 @@ export function syntheticCodeplug({ pool = true, roamListChannel = false, keys =
   const poolChannels = pool ? [
     channel(doc, 'CAPPLUSVOICECONV', 'VOICE 1', { rx: '463.1000', tx: '468.1000', colorCode: '3' }),
     channel(doc, 'CAPPLUSVOICECONV', 'VOICE 2', { rx: '463.2000', tx: '468.2000', colorCode: '3' }),
-    channel(doc, 'DGTLCONV6PT25', 'POOL ALL CALL', { rx: '463.3000', tx: '468.3000', colorCode: '4', contact: 'DIG ALL CALL', scanList: 'ScanItems/SCAN A', receiveOnly: 'True' })
+    channel(doc, 'DGTLCONV6PT25', 'POOL ALL CALL', { rx: '463.3000', tx: '468.3000', colorCode: '4', contact: 'DIG ALL CALL', scanList: 'ScanItems/SCAN A', receiveOnly: 'True', ...(poolKeys ? { privacyKey: 'PRIV A', rasKey: 'RAS A' } : {}) })
   ] : [];
 
   const voiceList = node(doc, CPS_BLUEPRINTS.voiceList);
