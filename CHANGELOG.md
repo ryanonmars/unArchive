@@ -2,7 +2,7 @@
 
 Each release's section is published as its GitHub release notes and update notes, and the app shows this history in About unArchive. Before tagging a release, rename **Unreleased** to the new version and date.
 
-## [Unreleased]
+## [0.3.0] - 2026-10-21
 
 ### Added
 - A File menu with Check for Updates and About unArchive. About shows the installed version and the release history.

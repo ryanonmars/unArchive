@@ -858,9 +858,10 @@ for (const pool of [true, false]) {
 
   const changelog = fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8');
   const releases = parseChangelog(changelog);
-  assert.equal(releases[0].version, 'Unreleased');
+  // Unreleased, when present, comes first; released versions follow, newest first.
+  assert.ok(releases.findIndex(release => release.version === 'Unreleased') <= 0);
   const released = releases.filter(release => release.version !== 'Unreleased');
-  assert.deepEqual(released.map(release => release.version), ['0.2.2', '0.2.1', '0.2.0', '0.1.0'], 'Every published release has a section, newest first.');
+  assert.deepEqual(released.map(release => release.version), ['0.3.0', '0.2.2', '0.2.1', '0.2.0', '0.1.0'], 'Every release has a section, newest first.');
   for (const release of released) {
     assert.match(release.date, /^\d{4}-\d{2}-\d{2}$/, `${release.version} has a date`);
     assert.ok(noteBlocks(release.notes).some(block => block.kind === 'list' && block.items.length), `${release.version} has notes`);
