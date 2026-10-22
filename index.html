@@ -20,15 +20,19 @@
         </div>
       </header>
 
-      <dialog id="about-dialog" class="app-dialog" aria-labelledby="about-title">
-        <h2 id="about-title">unArchive</h2>
-        <p id="about-version"></p>
-        <p>Build CPS codeplug workbooks locally.</p>
-        <details id="about-history" class="release-history">
-          <summary>Release history</summary>
-          <div id="about-releases"></div>
-        </details>
-        <div class="actions dialog-actions"><button id="about-close" class="secondary" type="button">Close</button></div>
+      <dialog id="about-dialog" class="app-dialog with-header" aria-labelledby="about-title">
+        <div class="dialog-header">
+          <h2 id="about-title">unArchive</h2>
+          <button id="about-close" class="dialog-close" type="button" aria-label="Close" title="Close">&times;</button>
+        </div>
+        <div class="dialog-body">
+          <p id="about-version"></p>
+          <p>Build CPS codeplug workbooks locally.</p>
+          <details id="about-history" class="release-history">
+            <summary>Release history</summary>
+            <div id="about-releases"></div>
+          </details>
+        </div>
       </dialog>
 
       <dialog id="update-dialog" class="app-dialog" aria-labelledby="update-title">

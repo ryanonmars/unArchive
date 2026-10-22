@@ -941,6 +941,14 @@ for (const pool of [true, false]) {
   assert.ok(headings.length >= 4 && !headings.some(heading => /Unreleased/.test(heading)));
   const firstItems = [...$('about-releases').querySelectorAll('.release-notes')][0].querySelectorAll('li');
   assert.deepEqual([...firstItems].map(item => item.textContent), noteBlocks(releaseNotesFor(changelog, installed).notes).filter(block => block.kind === 'list').flatMap(block => block.items));
+  // The close button sits in the dialog's pinned header, above the release
+  // history, so it is reachable however far the history is scrolled.
+  const header = $('about-dialog').firstElementChild;
+  assert.equal(header.className, 'dialog-header');
+  assert.equal(header.querySelector('#about-close'), $('about-close'));
+  assert.equal($('about-close').getAttribute('aria-label'), 'Close');
+  assert.ok($('about-dialog').querySelector('.dialog-body #about-history'));
+  assert.equal($('about-dialog').querySelectorAll('button').length, 1, 'About has no other close button.');
   $('about-close').dispatchEvent(new Event('click'));
   assert.equal(isOpen('about-dialog'), false);
   assert.equal(commands('plugin:updater|check').length, 1, 'About does not check for updates.');
