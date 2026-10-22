@@ -2,12 +2,28 @@
 // stubbed, so a test can export a workbook from CPS XML and import it back.
 // app.js runs once per process, so each test suite runs in its own process.
 import fs from 'node:fs';
+import { register } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import * as XLSX from 'xlsx';
 import { DOMParser, Event, parseHTML } from 'linkedom';
 
 export const root = path.resolve(import.meta.dirname, '..');
+
+// Vite bundles "file?raw" imports (the app's CHANGELOG.md) as text; teach
+// Node the same, so app.js loads here unchanged.
+register(`data:text/javascript,${encodeURIComponent(`
+  export async function resolve(specifier, context, next) {
+    if (specifier.endsWith('?raw')) return { url: new URL(specifier, context.parentURL).href, shortCircuit: true };
+    return next(specifier, context);
+  }
+  export async function load(url, context, next) {
+    if (!url.endsWith('?raw')) return next(url, context);
+    const { readFile } = await import('node:fs/promises');
+    const text = await readFile(new URL(url.slice(0, -'?raw'.length)), 'utf8');
+    return { format: 'module', source: 'export default ' + JSON.stringify(text), shortCircuit: true };
+  }
+`)}`);
 const { window, document } = parseHTML(fs.readFileSync(path.join(root, 'index.html'), 'utf8'));
 
 // linkedom returns escaped attribute entities for XML nodes while a browser DOM
@@ -26,19 +42,48 @@ document.implementation = {
   }
 };
 
+// The Tauri bridge. Every call is recorded in tauri.calls; a test answers a
+// command by setting tauri.handlers[command] (throwing makes the call fail).
+// The app runs as the desktop app: it reads its version from package.json,
+// builds its menu, and makes its quiet startup update check, which finds no
+// update unless a test says otherwise.
+export const tauri = {
+  calls: [],
+  handlers: {
+    'plugin:app|version': () => JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version,
+    'plugin:menu|new': () => [tauri.nextResource++, 'menu']
+  },
+  callbacks: new Map(), nextCallback: 1, nextResource: 1, channelIndexes: new Map()
+};
+// A test process can set how the startup update check and menu behave, since
+// both run once when app.js loads: UNARCHIVE_TEST_STARTUP_UPDATE is "fail"
+// (offline) or a version to offer, and UNARCHIVE_TEST_NO_MENU makes the menu
+// unavailable.
+const startupUpdate = process.env.UNARCHIVE_TEST_STARTUP_UPDATE;
+if (startupUpdate === 'fail') tauri.handlers['plugin:updater|check'] = () => { throw new Error('offline'); };
+else if (startupUpdate) tauri.handlers['plugin:updater|check'] = () => ({ rid: 900, currentVersion: tauri.handlers['plugin:app|version'](), version: startupUpdate, date: '', body: ['### Fixed', '- A startup test fix'].join('\n'), rawJson: {} });
+if (process.env.UNARCHIVE_TEST_NO_MENU) tauri.handlers['plugin:menu|new'] = () => { throw new Error('menus are unavailable'); };
 let exportedWorkbook;
 window.__TAURI_INTERNALS__ = {
   async invoke(command, args) {
+    tauri.calls.push({ command, args });
     if (command === 'plugin:dialog|save') return 'C:\\temporary\\unarchive-test.xlsx';
     if (command === 'plugin:fs|write_file') {
       exportedWorkbook = new Uint8Array(args);
       return null;
     }
-    return null;
+    return tauri.handlers[command] ? tauri.handlers[command](args) : null;
   },
-  transformCallback() { return 1; },
-  unregisterCallback() {}
+  transformCallback(callback) { const id = tauri.nextCallback++; tauri.callbacks.set(id, callback); return id; },
+  unregisterCallback(id) { tauri.callbacks.delete(id); }
 };
+// Delivers a message on a Tauri channel, as the desktop app does when a menu
+// item is clicked.
+export function sendToChannel(channel, message) {
+  const index = tauri.channelIndexes.get(channel.id) || 0;
+  tauri.channelIndexes.set(channel.id, index + 1);
+  tauri.callbacks.get(channel.id)({ index, message });
+}
 
 Object.assign(globalThis, {
   window,

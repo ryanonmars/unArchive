@@ -47,6 +47,14 @@ jobs:
         shell: bash
         run: node scripts/set-version.mjs "${GITHUB_REF_NAME#v}"
 
+      # CHANGELOG.md is the only place release notes are written. This fails
+      # the release, before anything is built, when the tagged version has no
+      # section there.
+      - name: Read release notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: node scripts/release-notes.mjs "${GITHUB_REF_NAME#v}" > release-notes.md
+
       # Signing the installer lets the in-app updater verify it. The public key
       # is in tauri.conf.json; the private key is the TAURI_SIGNING_PRIVATE_KEY
       # repository secret.
@@ -91,7 +99,7 @@ jobs:
             const { GITHUB_REF_NAME: tag, GITHUB_REPOSITORY: repo, INSTALLER: file, INSTALLER_NAME: name } = process.env;
             const manifest = {
               version: tag.replace(/^v/, ""),
-              notes: `unArchive ${tag}`,
+              notes: fs.readFileSync("release-notes.md", "utf8").trim(),
               pub_date: new Date().toISOString(),
               platforms: {
                 "windows-x86_64": {
@@ -111,10 +119,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           INSTALLER: ${{ steps.installer.outputs.path }}
         run: |
-          notes="Download ${{ steps.installer.outputs.name }} below and run it to install or update unArchive on Windows 10 or 11."
+          { cat release-notes.md; printf '\nDownload %s below and run it to install or update unArchive on Windows 10 or 11.\n' "${{ steps.installer.outputs.name }}"; } > release-body.md
           assets=("$INSTALLER" "$INSTALLER.sig" latest.json)
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --notes-file release-body.md
           else
-            gh release create "$GITHUB_REF_NAME" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --title "unArchive $GITHUB_REF_NAME" --notes "$notes"
+            gh release create "$GITHUB_REF_NAME" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --title "unArchive $GITHUB_REF_NAME" --notes-file release-body.md
           fi

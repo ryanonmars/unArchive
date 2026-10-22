@@ -10,13 +10,36 @@
   <body>
     <main>
       <header class="app-bar">
-        <span id="app-version" class="app-version">unArchive</span>
+        <div class="app-identity">
+          <span id="app-version" class="app-version">unArchive</span>
+          <button id="update-available" class="update-available" type="button" hidden>Update available</button>
+        </div>
         <div class="app-update">
           <span id="update-status" class="status" aria-live="polite"></span>
-          <button id="update-install" class="small" hidden>Install update</button>
-          <button id="update-check" class="secondary small" hidden>Check for updates</button>
+          <button id="update-check" class="secondary small" type="button" hidden>Check for updates</button>
         </div>
       </header>
+
+      <dialog id="about-dialog" class="app-dialog" aria-labelledby="about-title">
+        <h2 id="about-title">unArchive</h2>
+        <p id="about-version"></p>
+        <p>Build CPS codeplug workbooks locally.</p>
+        <details id="about-history" class="release-history">
+          <summary>Release history</summary>
+          <div id="about-releases"></div>
+        </details>
+        <div class="actions dialog-actions"><button id="about-close" class="secondary" type="button">Close</button></div>
+      </dialog>
+
+      <dialog id="update-dialog" class="app-dialog" aria-labelledby="update-title">
+        <h2 id="update-title">Update available</h2>
+        <p id="update-versions"></p>
+        <div id="update-notes" class="release-notes"></div>
+        <div class="actions dialog-actions">
+          <button id="update-install" type="button">Install update</button>
+          <button id="update-later" class="secondary" type="button">Not now</button>
+        </div>
+      </dialog>
       <section class="card">
         <div class="step"><span>1</span><div><h2>Copy your configuration from CPS</h2><p>In CPS, copy the full configuration, then select Paste from Clipboard. Nothing leaves this browser.</p></div></div>
         <div class="actions">

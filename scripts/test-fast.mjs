@@ -2,14 +2,18 @@
 // committed blueprints, so it needs no customer data and is tracked in Git.
 // The full suite against real CPS fixtures stays local (see README).
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import * as XLSX from 'xlsx';
 import JSZip from 'jszip';
 import { CPS_BLUEPRINTS } from '../blueprints.generated.js';
 import {
-  document, exportWorkbookFrom, workbookFrom, rowsFor, replaceRows, appendRow, importWorkbook as harnessImport,
+  root, tauri, sendToChannel, waitFor, document, exportWorkbookFrom, workbookFrom, rowsFor, replaceRows, appendRow, importWorkbook as harnessImport,
   xmlDocument, directElements, category, allChannels, fieldOf, channelType
 } from './test-harness.mjs';
 import { syntheticCodeplug } from './test-fixture.mjs';
+import { compareVersions, hasRealNotes, noteBlocks, parseChangelog, releaseHistory, releaseNotesFor } from '../release-notes.js';
 
 // The import summary is for people, so it never shows CPS's internal
 // field names, record types, category names, or enum codes. Every import in
@@ -838,6 +842,185 @@ for (const pool of [true, false]) {
   assert.throws(() => assertPlainSummary({ summary: ['Old channels had settings: Channel — DEVMEDFORINDDATACALL on 25, Off Set on 25.'] }));
   assert.throws(() => assertPlainSummary({ summary: ['Reset CP_TOT on 3 and STR_12PT5KHZ.'] }));
   assert.throws(() => assertPlainSummary({ summary: ['Scan list in ScanItems.'] }));
+}
+
+// Release notes: CHANGELOG.md is the one place they are written. The release
+// workflow publishes each version's section; the app bundles the file for
+// About unArchive.
+{
+  assert.ok(compareVersions('0.10.0', '0.9.9') > 0, '0.10.0 is newer than 0.9.9');
+  assert.ok(compareVersions('0.2.2', '0.2.10') < 0);
+  assert.equal(compareVersions('v0.2.2', '0.2.2'), 0);
+  assert.equal(compareVersions('1.0', '1.0.0'), 0);
+  assert.ok(compareVersions('1.0.0', '0.99.99') > 0);
+  assert.ok(compareVersions('0.3.0-beta', '0.2.9') > 0);
+  assert.equal(compareVersions('', '0.0.0'), 0);
+
+  const changelog = fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8');
+  const releases = parseChangelog(changelog);
+  assert.equal(releases[0].version, 'Unreleased');
+  const released = releases.filter(release => release.version !== 'Unreleased');
+  assert.deepEqual(released.map(release => release.version), ['0.2.2', '0.2.1', '0.2.0', '0.1.0'], 'Every published release has a section, newest first.');
+  for (const release of released) {
+    assert.match(release.date, /^\d{4}-\d{2}-\d{2}$/, `${release.version} has a date`);
+    assert.ok(noteBlocks(release.notes).some(block => block.kind === 'list' && block.items.length), `${release.version} has notes`);
+    assert.ok(hasRealNotes(release.notes));
+  }
+  const installed = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+  assert.ok(releaseNotesFor(changelog, installed), 'The current version has release notes.');
+  assert.deepEqual(releaseHistory(changelog, '0.2.1').map(release => release.version), ['0.2.1', '0.2.0', '0.1.0'], 'History stops at the installed version.');
+
+  // Placeholder notes published before the changelog existed are not shown.
+  for (const placeholder of ['', '   ', 'unArchive v0.2.2', 'unArchive 0.3.0']) assert.equal(hasRealNotes(placeholder), false, JSON.stringify(placeholder));
+  assert.deepEqual(noteBlocks('### Added\n- **One** thing\n- `Two` [things](https://example.com)\n\nA paragraph.'), [
+    { kind: 'heading', text: 'Added' }, { kind: 'list', items: ['One thing', 'Two things'] }, { kind: 'paragraph', text: 'A paragraph.' }
+  ]);
+
+  // The release workflow's script prints one version's section and refuses
+  // a version without notes.
+  const notesScript = version => spawnSync(process.execPath, [path.join(root, 'scripts', 'release-notes.mjs'), version], { encoding: 'utf8' });
+  const printed = notesScript('v0.2.1');
+  assert.equal(printed.status, 0, printed.stderr);
+  assert.equal(printed.stdout.trim(), releaseNotesFor(changelog, '0.2.1').notes);
+  const missing = notesScript('9.9.9');
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /CHANGELOG\.md has no notes for 9\.9\.9/);
+  assert.equal(notesScript('latest').status, 2);
+}
+
+// Startup: one quiet update check, never a popup, whatever it finds. Each
+// case starts the app in a fresh process.
+{
+  const start = env => {
+    const run = spawnSync(process.execPath, [path.join(root, 'scripts', 'test-startup.mjs')], { encoding: 'utf8', env: { ...process.env, ...env } });
+    assert.equal(run.status, 0, run.stderr);
+    return JSON.parse(run.stdout);
+  };
+  const quiet = { checks: 1, menus: 1, status: '', dialogsOpen: [], prompts: 0 };
+  const none = start({});
+  assert.deepEqual({ ...none, indicatorTitle: undefined }, { ...quiet, indicatorHidden: true, fallbackButtonHidden: true, indicatorTitle: undefined });
+  const offline = start({ UNARCHIVE_TEST_STARTUP_UPDATE: 'fail' });
+  assert.deepEqual({ ...offline, indicatorTitle: undefined }, { ...quiet, indicatorHidden: true, fallbackButtonHidden: true, indicatorTitle: undefined }, 'An offline or failed startup check shows nothing.');
+  const available = start({ UNARCHIVE_TEST_STARTUP_UPDATE: '0.3.0' });
+  assert.deepEqual(available, { ...quiet, indicatorHidden: false, indicatorTitle: 'unArchive 0.3.0 is available', fallbackButtonHidden: true }, 'A newer version only shows the indicator.');
+  const noMenu = start({ UNARCHIVE_TEST_NO_MENU: '1' });
+  assert.equal(noMenu.fallbackButtonHidden, false, 'Without the menu, Check for updates stays in the window.');
+  assert.equal(noMenu.checks, 1);
+}
+
+// The File menu, About unArchive, and manual update checks in the running app.
+{
+  const $ = id => document.getElementById(id);
+  const isOpen = id => $(id).hasAttribute('open');
+  const commands = name => tauri.calls.filter(call => call.command === name);
+  await waitFor(() => commands('plugin:updater|check').length, 'the startup update check');
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(commands('plugin:updater|check').length, 1, 'Exactly one automatic check, at startup.');
+  assert.equal(commands('plugin:menu|new').length, 1);
+  assert.equal(commands('plugin:menu|set_as_app_menu').length, 1);
+
+  // File holds exactly Check for Updates and About unArchive.
+  const menu = commands('plugin:menu|new')[0].args;
+  assert.equal(menu.kind, 'Menu');
+  assert.deepEqual(menu.options.items.map(item => item.text), ['File'], 'File is the only menu.');
+  const file = menu.options.items[0].items;
+  assert.deepEqual(file.map(item => item.text || item.item), ['Check for Updates', 'Separator', 'About unArchive']);
+  const click = text => sendToChannel(file.find(item => item.text === text).handler, file.find(item => item.text === text).id);
+  const status = () => $('update-status').textContent;
+
+  // About shows the installed version and its release history, newest first,
+  // without needing an update.
+  assert.equal(isOpen('about-dialog'), false);
+  click('About unArchive');
+  assert.equal(isOpen('about-dialog'), true);
+  const installed = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+  assert.equal($('about-version').textContent, `Version ${installed}`);
+  const changelog = fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8');
+  const headings = [...$('about-releases').querySelectorAll('h3')].map(heading => heading.textContent);
+  assert.deepEqual(headings, releaseHistory(changelog, installed).map(release => `${release.version} — ${release.date}`));
+  assert.ok(headings.length >= 4 && !headings.some(heading => /Unreleased/.test(heading)));
+  const firstItems = [...$('about-releases').querySelectorAll('.release-notes')][0].querySelectorAll('li');
+  assert.deepEqual([...firstItems].map(item => item.textContent), noteBlocks(releaseNotesFor(changelog, installed).notes).filter(block => block.kind === 'list').flatMap(block => block.items));
+  $('about-close').dispatchEvent(new Event('click'));
+  assert.equal(isOpen('about-dialog'), false);
+  assert.equal(commands('plugin:updater|check').length, 1, 'About does not check for updates.');
+
+  // Up to date.
+  tauri.handlers['plugin:updater|check'] = () => null;
+  click('Check for Updates');
+  await waitFor(() => status() === 'You have the latest version.', 'the up-to-date message');
+  assert.equal($('update-available').hidden, true);
+  assert.equal(isOpen('update-dialog'), false);
+  assert.equal(commands('plugin:updater|check').length, 2);
+
+  // Offline or failed.
+  tauri.handlers['plugin:updater|check'] = () => { throw new Error('offline'); };
+  click('Check for Updates');
+  await waitFor(() => /Could not check for updates/.test(status()), 'the failed-check message');
+  assert.equal($('update-status').className, 'status error');
+  assert.equal($('update-available').hidden, true);
+  assert.equal(isOpen('update-dialog'), false);
+
+  // A newer version: the dialog shows its notes, and the indicator appears.
+  const offer = (version, body) => ({ rid: 77, currentVersion: installed, version, date: '2026-11-01 00:00:00 +00:00', body, rawJson: {} });
+  tauri.handlers['plugin:updater|check'] = () => offer('0.3.0', '### Added\n- **Faster** imports\n- A File menu\n\n### Fixed\n- Something');
+  click('Check for Updates');
+  await waitFor(() => isOpen('update-dialog'), 'the update dialog');
+  assert.equal(status(), '');
+  assert.equal($('update-title').textContent, 'unArchive 0.3.0 is available');
+  assert.equal($('update-versions').textContent, `You have version ${installed}.`);
+  assert.deepEqual([...$('update-notes').querySelectorAll('h4')].map(item => item.textContent), ['Added', 'Fixed']);
+  assert.deepEqual([...$('update-notes').querySelectorAll('li')].map(item => item.textContent), ['Faster imports', 'A File menu', 'Something']);
+  assert.equal($('update-notes').innerHTML.includes('**'), false);
+  assert.equal($('update-available').hidden, false);
+  assert.equal($('update-available').textContent, 'Update available');
+  $('update-later').dispatchEvent(new Event('click'));
+  assert.equal(isOpen('update-dialog'), false);
+  assert.equal($('update-available').hidden, false, 'Not now keeps the indicator.');
+
+  // The indicator reopens the dialog, and Install update uses the existing
+  // confirmation and installer: Not now does nothing, Install installs.
+  $('update-available').dispatchEvent(new Event('click'));
+  assert.equal(isOpen('update-dialog'), true);
+  const prompts = commands('plugin:dialog|message').length;
+  tauri.handlers['plugin:dialog|message'] = () => 'Not now';
+  $('update-install').dispatchEvent(new Event('click'));
+  await waitFor(() => commands('plugin:dialog|message').length === prompts + 1, 'the install confirmation');
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.match(commands('plugin:dialog|message').at(-1).args.message, /unArchive 0\.3\.0 will download and install now/);
+  assert.equal(commands('plugin:updater|download_and_install').length, 0);
+  assert.equal(isOpen('update-dialog'), true);
+  tauri.handlers['plugin:dialog|message'] = () => 'Install';
+  $('update-install').dispatchEvent(new Event('click'));
+  await waitFor(() => commands('plugin:updater|download_and_install').length === 1, 'the installer');
+  assert.equal(commands('plugin:updater|download_and_install')[0].args.rid, 77);
+  assert.equal(isOpen('update-dialog'), false, 'The dialog closes so download progress shows.');
+
+  // A failed check keeps the update the last good check found.
+  tauri.handlers['plugin:updater|check'] = () => { throw new Error('offline'); };
+  click('Check for Updates');
+  await waitFor(() => /Could not check for updates/.test(status()), 'the failed-check message');
+  assert.equal($('update-available').hidden, false);
+
+  // Placeholder notes are not shown as if they were notes.
+  tauri.handlers['plugin:updater|check'] = () => offer('0.3.1', 'unArchive v0.3.1');
+  click('Check for Updates');
+  await waitFor(() => $('update-title').textContent === 'unArchive 0.3.1 is available' && isOpen('update-dialog'), 'the update dialog');
+  assert.equal($('update-notes').textContent, 'Release notes are not available for this version.');
+  $('update-later').dispatchEvent(new Event('click'));
+
+  // Checks never overlap: two clicks while one is running make one request.
+  let release;
+  tauri.handlers['plugin:updater|check'] = () => new Promise(resolve => { release = () => resolve(null); });
+  const before = commands('plugin:updater|check').length;
+  click('Check for Updates');
+  click('Check for Updates');
+  await waitFor(() => release, 'the pending check');
+  assert.equal(commands('plugin:updater|check').length, before + 1);
+  release();
+  await waitFor(() => status() === 'You have the latest version.', 'the up-to-date message');
+  assert.equal($('update-available').hidden, true, 'A later check that finds nothing clears the indicator.');
+  tauri.handlers['plugin:updater|check'] = () => null;
 }
 
 console.log('Fast tests passed.');

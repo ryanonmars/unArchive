@@ -21,7 +21,7 @@ Your codeplug is processed locally. The packaged app bundles its Excel dependenc
 
 ### Updates
 
-The top of the app shows the installed version. When it starts, unArchive quietly checks the latest GitHub release; if a newer version exists, **Install update** downloads it, verifies its signature, closes the app, and runs the installer. **Check for updates** checks on demand. Without internet access the check simply does nothing. Versions before 0.2.0 have no updater, so install 0.2.0 once by hand.
+The top of the app shows the installed version. When it starts, unArchive quietly checks the latest GitHub release once; it never shows a popup, and without internet access the check simply does nothing. If a newer version exists, a small **Update available** indicator appears beside the version. Select it to see the new version's release notes and **Install update**, which downloads the update, verifies its signature, closes the app, and runs the installer. **File > Check for Updates** checks on demand and reports the result. **File > About unArchive** shows the installed version and its release history. Versions before 0.2.0 have no updater, so install 0.2.0 once by hand.
 
 ## Import safety rules
 
@@ -64,10 +64,13 @@ The shareable installer will be created under `src-tauri\target\release\bundle\n
 
 The **Windows installer** GitHub Actions workflow runs the fast tests (`npm test`) and stops if any fail, then builds and signs the installer on a Windows runner, then publishes a release with the setup executable, its signature, and the `latest.json` update manifest that installed apps check. The version comes from the tag, so there is no need to edit version numbers before releasing, but each tag must be higher than the last release or installed apps will not offer it. The full import safety tests need the local fixtures, so run them before tagging:
 
+Release notes live only in `CHANGELOG.md`. Before tagging, rename its **Unreleased** heading to the new version and date (for example `## [0.2.3] - 2026-11-02`) and commit it. The workflow publishes that section as the GitHub release notes and as the update notes installed apps show, and it stops before building if the section is missing. Check it with `node scripts/release-notes.mjs 0.2.3`.
+
 ```powershell
 npm run test:full
-git tag v0.2.1
-git push origin v0.2.1
+node scripts/release-notes.mjs 0.2.3
+git tag v0.2.3
+git push origin v0.2.3
 ```
 
 The latest installer is always available from the repository's **Releases** page. Running the workflow manually from the **Actions** tab builds a signed installer artifact for testing without publishing a release. To set the version in the source files locally, run `npm run version:set -- 0.2.1`.

@@ -5,7 +5,10 @@ import { readText as readClipboardText, writeText as writeClipboardText } from '
 import { ask, save } from '@tauri-apps/plugin-dialog';
 import { writeFile } from '@tauri-apps/plugin-fs';
 import { getVersion } from '@tauri-apps/api/app';
+import { Menu } from '@tauri-apps/api/menu';
 import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
+import CHANGELOG from './CHANGELOG.md?raw';
+import { hasRealNotes, noteBlocks, releaseHistory } from './release-notes.js';
 (() => {
   'use strict';
   const $ = (id) => document.getElementById(id);
@@ -1856,27 +1859,70 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
   $('download-xml').addEventListener('click', async () => { try { const saved = await saveFile(output.value, 'codeplug-rebuilt.xml', { name: 'CPS XML', extensions: ['xml'] }); message(outputStatus, saved ? 'Rebuilt XML saved.' : 'Rebuilt XML save cancelled.', saved ? 'ok' : ''); } catch (err) { message(outputStatus, err.message, 'error'); } });
 
   // Updates come from the signed latest.json published with each GitHub
-  // release; the updater refuses any installer not signed with our key. The
-  // startup check is quiet, so only a manual check reports "up to date" or a
-  // network problem.
-  const updateStatus = $('update-status'), updateCheck = $('update-check'), updateInstall = $('update-install');
-  let pendingUpdate = null;
+  // release; the updater refuses any installer not signed with our key. One
+  // quiet check runs at startup: a newer version only shows the Update
+  // available indicator beside the version, never a popup, and a failed or
+  // offline check shows nothing. File > Check for Updates runs the same check
+  // and reports its result.
+  const updateStatus = $('update-status'), updateCheck = $('update-check'), updateInstall = $('update-install'), updateAvailable = $('update-available');
+  const updateDialog = $('update-dialog'), aboutDialog = $('about-dialog');
+  let pendingUpdate = null, installedVersion = '', checking = null;
+  function openDialog(dialog) {
+    if (typeof dialog.showModal === 'function') { if (!dialog.open) dialog.showModal(); }
+    else dialog.setAttribute('open', '');
+  }
+  function closeDialog(dialog) {
+    if (typeof dialog.close === 'function') dialog.close();
+    dialog.removeAttribute('open');
+  }
+  // Release notes are shown as text only; nothing from them is inserted as HTML.
+  function renderNotes(container, notes) {
+    for (const block of noteBlocks(notes)) {
+      if (block.kind === 'list') {
+        const list = document.createElement('ul');
+        for (const text of block.items) { const item = document.createElement('li'); item.textContent = text; list.append(item); }
+        container.append(list);
+      } else {
+        const element = document.createElement(block.kind === 'heading' ? 'h4' : 'p');
+        element.textContent = block.text;
+        container.append(element);
+      }
+    }
+  }
+  function showUpdateIndicator() {
+    updateAvailable.hidden = !pendingUpdate;
+    updateAvailable.title = pendingUpdate ? `unArchive ${pendingUpdate.version} is available` : '';
+  }
+  function openUpdateDialog() {
+    if (!pendingUpdate) return;
+    $('update-title').textContent = `unArchive ${pendingUpdate.version} is available`;
+    $('update-versions').textContent = installedVersion ? `You have version ${installedVersion}.` : '';
+    const notes = $('update-notes');
+    notes.replaceChildren();
+    if (hasRealNotes(pendingUpdate.body)) renderNotes(notes, pendingUpdate.body);
+    else { const none = document.createElement('p'); none.textContent = 'Release notes are not available for this version.'; notes.append(none); }
+    updateInstall.disabled = false;
+    openDialog(updateDialog);
+  }
+  // Startup and manual checks share one request, so a check never runs twice
+  // at once. A failed check keeps whatever the last good check found.
   async function checkUpdates(manual) {
-    updateCheck.disabled = true;
     if (manual) message(updateStatus, 'Checking for updates…');
-    try {
-      pendingUpdate = await checkForUpdate();
-      updateInstall.hidden = !pendingUpdate;
-      if (pendingUpdate) message(updateStatus, `Version ${pendingUpdate.version} is available.`, 'ok');
-      else if (manual) message(updateStatus, 'You have the latest version.', 'ok');
-    } catch {
-      if (manual) message(updateStatus, 'Could not check for updates. Check your internet connection and try again.', 'error');
-    } finally { updateCheck.disabled = false; }
+    updateCheck.disabled = true;
+    checking ||= checkForUpdate().then(update => ({ update }), error => ({ error })).finally(() => { checking = null; });
+    const { update, error } = await checking;
+    updateCheck.disabled = false;
+    if (!error) { pendingUpdate = update || null; showUpdateIndicator(); }
+    if (!manual) return;
+    if (error) message(updateStatus, 'Could not check for updates. Check your internet connection and try again.', 'error');
+    else if (pendingUpdate) { message(updateStatus, ''); openUpdateDialog(); }
+    else message(updateStatus, 'You have the latest version.', 'ok');
   }
   async function installUpdate() {
     if (!pendingUpdate) return;
     const proceed = await ask(`unArchive ${pendingUpdate.version} will download and install now. unArchive closes during the install, so save any workbook or XML you still need first.`, { title: 'Install update', kind: 'info', okLabel: 'Install', cancelLabel: 'Not now' });
     if (!proceed) return;
+    closeDialog(updateDialog);
     updateInstall.disabled = true; updateCheck.disabled = true;
     try {
       let total = 0, received = 0;
@@ -1890,14 +1936,49 @@ import { check as checkForUpdate } from '@tauri-apps/plugin-updater';
       updateInstall.disabled = false; updateCheck.disabled = false;
     }
   }
+  // About shows the installed version and its release history from the
+  // CHANGELOG.md bundled with this build, whether or not an update exists.
+  function openAbout() {
+    $('about-version').textContent = installedVersion ? `Version ${installedVersion}` : '';
+    const releases = $('about-releases');
+    releases.replaceChildren();
+    const history = releaseHistory(CHANGELOG, installedVersion);
+    if (!history.length) { const none = document.createElement('p'); none.textContent = 'No release history is available.'; releases.append(none); }
+    for (const release of history) {
+      const heading = document.createElement('h3');
+      heading.textContent = release.date ? `${release.version} — ${release.date}` : release.version;
+      const notes = document.createElement('div');
+      notes.className = 'release-notes';
+      renderNotes(notes, release.notes);
+      releases.append(heading, notes);
+    }
+    $('about-history').removeAttribute('open');
+    openDialog(aboutDialog);
+  }
+  async function installMenu() {
+    try {
+      const menu = await Menu.new({ items: [{ text: 'File', items: [
+        { id: 'check-for-updates', text: 'Check for Updates', action: () => checkUpdates(true) },
+        { item: 'Separator' },
+        { id: 'about', text: 'About unArchive', action: openAbout }
+      ] }] });
+      await menu.setAsAppMenu();
+      return true;
+    } catch { return false; }
+  }
   (async () => {
-    let version = '';
-    try { version = await getVersion(); } catch { /* Not running inside the desktop app. */ }
-    if (!version) return;
-    $('app-version').textContent = `unArchive v${version}`;
-    updateCheck.hidden = false;
-    updateCheck.addEventListener('click', () => checkUpdates(true));
+    try { installedVersion = await getVersion(); } catch { /* Not running inside the desktop app. */ }
+    if (!installedVersion) return;
+    $('app-version').textContent = `unArchive v${installedVersion}`;
+    updateAvailable.addEventListener('click', openUpdateDialog);
     updateInstall.addEventListener('click', installUpdate);
+    $('update-later').addEventListener('click', () => closeDialog(updateDialog));
+    $('about-close').addEventListener('click', () => closeDialog(aboutDialog));
+    // Should the menu be unavailable, the manual check stays reachable here.
+    if (!(await installMenu())) {
+      updateCheck.hidden = false;
+      updateCheck.addEventListener('click', () => checkUpdates(true));
+    }
     checkUpdates(false);
   })();
 })();
