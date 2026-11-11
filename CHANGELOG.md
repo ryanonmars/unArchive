@@ -1,6 +1,6 @@
 # Changelog
 
-Each release's section is published as its GitHub release notes and update notes, and the app shows this history in About unArchive. Before tagging a release, rename **Unreleased** to the new version and date.
+Each release's section is published as its GitHub release notes and update notes, and the app shows this history in About unArchive. Before tagging a release, rename **Unreleased** to the new version and date, and set the same version with `npm run version:set`.
 
 ## [0.3.0] - 2026-10-21
 

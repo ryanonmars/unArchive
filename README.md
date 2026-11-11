@@ -62,18 +62,24 @@ The shareable installer will be created under `src-tauri\target\release\bundle\n
 
 ## Publish a release
 
-The **Windows installer** GitHub Actions workflow runs the fast tests (`npm test`) and stops if any fail, then builds and signs the installer on a Windows runner, then publishes a release with the setup executable, its signature, and the `latest.json` update manifest that installed apps check. The version comes from the tag, so there is no need to edit version numbers before releasing, but each tag must be higher than the last release or installed apps will not offer it. The full import safety tests need the local fixtures, so run them before tagging:
+The **Windows installer** GitHub Actions workflow runs the fast tests (`npm test`) and stops if any fail, then builds and signs the installer on a Windows runner, then publishes a release with the setup executable, its signature, and the `latest.json` update manifest that installed apps check. Each tag must be higher than the last release or installed apps will not offer it.
 
-Release notes live only in `CHANGELOG.md`. Before tagging, rename its **Unreleased** heading to the new version and date (for example `## [0.2.3] - 2026-11-02`) and commit it. The workflow publishes that section as the GitHub release notes and as the update notes installed apps show, and it stops before building if the section is missing. Check it with `node scripts/release-notes.mjs 0.2.3`.
+Before tagging, prepare a release commit:
+
+1. Rename the **Unreleased** heading in `CHANGELOG.md` to the new version and date (for example `## [0.3.1] - 2026-11-12`). Release notes live only there: the workflow publishes that section as the GitHub release notes and as the update notes installed apps show, and it stops before building if the section is missing.
+2. Set the version in the source files with `npm run version:set -- 0.3.1`. This keeps local builds showing the released version. The workflow stops before building if the committed version does not match the tag.
+3. Run the full import safety tests, which need the local fixtures, then commit and tag that commit.
 
 ```powershell
+npm run version:set -- 0.3.1
+node scripts/release-notes.mjs 0.3.1
 npm run test:full
-node scripts/release-notes.mjs 0.2.3
-git tag v0.2.3
-git push origin v0.2.3
+git commit -am "Release 0.3.1"
+git tag v0.3.1
+git push origin main v0.3.1
 ```
 
-The latest installer is always available from the repository's **Releases** page. Running the workflow manually from the **Actions** tab builds a signed installer artifact for testing without publishing a release. To set the version in the source files locally, run `npm run version:set -- 0.2.1`.
+The latest installer is always available from the repository's **Releases** page. Running the workflow manually from the **Actions** tab builds a signed installer artifact for testing without publishing a release; it uses the version committed on that branch.
 
 ### Update signing key
 
